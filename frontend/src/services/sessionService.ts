@@ -1,4 +1,4 @@
-import { GetOrCreateSession, GetSessionMessages, ClearSessionMessages, SendMeetingMessage, UpdateStockPosition } from '../../wailsjs/go/main/App';
+import { isWailsEnv, httpRequest } from './apiAdapter';
 import type { StockPosition } from '../types';
 
 export interface StockSession {
@@ -33,27 +33,62 @@ export interface MeetingMessageRequest {
   replyContent: string;
 }
 
+// Wails 模式下动态导入
+let wailsApi: any = null;
+const getWailsApi = async () => {
+  if (!wailsApi) {
+    wailsApi = await import('@wailsjs/go/main/App');
+  }
+  return wailsApi;
+};
+
 // 获取或创建Session
 export const getOrCreateSession = async (stockCode: string, stockName: string): Promise<StockSession> => {
-  return await GetOrCreateSession(stockCode, stockName);
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.GetOrCreateSession(stockCode, stockName);
+  }
+  return httpRequest<StockSession>(`/api/session?stockCode=${stockCode}&stockName=${encodeURIComponent(stockName)}`);
 };
 
 // 获取Session消息
 export const getSessionMessages = async (stockCode: string): Promise<ChatMessage[]> => {
-  return await GetSessionMessages(stockCode);
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.GetSessionMessages(stockCode);
+  }
+  return httpRequest<ChatMessage[]>(`/api/session/messages?stockCode=${stockCode}`);
 };
 
 // 清空Session消息
 export const clearSessionMessages = async (stockCode: string): Promise<string> => {
-  return await ClearSessionMessages(stockCode);
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.ClearSessionMessages(stockCode);
+  }
+  await httpRequest(`/api/session/messages?stockCode=${stockCode}`, { method: 'DELETE' });
+  return 'success';
 };
 
 // 发送会议室消息（@指定成员回复）
+// 注意：Web 模式下此功能暂不支持（需要 WebSocket 实现实时推送）
 export const sendMeetingMessage = async (req: MeetingMessageRequest): Promise<ChatMessage[]> => {
-  return await SendMeetingMessage(req);
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.SendMeetingMessage(req);
+  }
+  // Web 模式暂不支持会议室实时对话
+  console.warn('sendMeetingMessage is not supported in web mode yet');
+  return [];
 };
 
 // 更新股票持仓信息
 export const updateStockPosition = async (stockCode: string, shares: number, costPrice: number): Promise<string> => {
-  return await UpdateStockPosition(stockCode, shares, costPrice);
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.UpdateStockPosition(stockCode, shares, costPrice);
+  }
+  // Web 模式下暂未实现此 API
+  console.warn('updateStockPosition is not supported in web mode yet');
+  return 'success';
 };

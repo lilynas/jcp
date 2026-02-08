@@ -1,11 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { LoginPage } from './components/LoginPage';
-import { checkAuthStatus, login } from './services/webApi';
-
-// 检测是否在 Wails 环境中运行
-const isWailsEnv = () => {
-  return typeof (window as any).go !== 'undefined';
-};
+import { isWailsEnv, checkAuthStatus, login } from './services/apiAdapter';
 
 interface AuthState {
   loading: boolean;
@@ -42,7 +37,7 @@ export const WebAuthWrapper: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   useEffect(() => {
-    // 如果是 Wails 环境，跳过认证
+    // 如果是 Wails 环境，跳过认证检查
     if (isWailsEnv()) {
       setAuthState({
         loading: false,

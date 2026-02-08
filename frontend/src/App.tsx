@@ -12,11 +12,77 @@ import { getWatchlist, addToWatchlist, removeFromWatchlist } from './services/wa
 import { getKLineData, getOrderBook } from './services/stockService';
 import { getOrCreateSession, StockSession, updateStockPosition } from './services/sessionService';
 import { useMarketEvents } from './hooks/useMarketEvents';
+import { isWailsEnv, httpRequest } from './services/apiAdapter';
 import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex, MarketStatus } from './types';
 import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp } from 'lucide-react';
 import logo from './assets/images/logo.png';
-import { GetTelegraphList, OpenURL, WindowMinimize, WindowMaximize, WindowClose } from '../wailsjs/go/main/App';
-import { WindowIsMaximised } from '../wailsjs/runtime/runtime';
+
+// Wails API 动态导入
+let wailsApp: any = null;
+let wailsRuntime: any = null;
+
+const getWailsApp = async () => {
+  if (!wailsApp && isWailsEnv()) {
+    wailsApp = await import('../wailsjs/go/main/App');
+  }
+  return wailsApp;
+};
+
+const getWailsRuntime = async () => {
+  if (!wailsRuntime && isWailsEnv()) {
+    wailsRuntime = await import('../wailsjs/runtime/runtime');
+  }
+  return wailsRuntime;
+};
+
+// 窗口控制函数 (仅 Wails 模式有效)
+const windowMinimize = async () => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    app?.WindowMinimize();
+  }
+};
+
+const windowMaximize = async () => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    app?.WindowMaximize();
+  }
+};
+
+const windowClose = async () => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    app?.WindowClose();
+  }
+};
+
+const windowIsMaximised = async (): Promise<boolean> => {
+  if (isWailsEnv()) {
+    const runtime = await getWailsRuntime();
+    return runtime?.WindowIsMaximised() ?? false;
+  }
+  return false;
+};
+
+// 快讯服务
+const getTelegraphList = async (): Promise<Telegraph[]> => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app?.GetTelegraphList() ?? [];
+  }
+  return httpRequest<Telegraph[]>('/api/news/telegraph');
+};
+
+// 打开 URL
+const openURL = async (url: string) => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    app?.OpenURL(url);
+  } else {
+    window.open(url, '_blank');
+  }
+};
 
 const App: React.FC = () => {
   const [watchlist, setWatchlist] = useState<Stock[]>([]);
@@ -85,7 +151,7 @@ const App: React.FC = () => {
       setShowTelegraphList(true);
       setTelegraphLoading(true);
       try {
-        const list = await GetTelegraphList();
+        const list = await getTelegraphList();
         setTelegraphList(list || []);
       } finally {
         setTelegraphLoading(false);
@@ -98,7 +164,7 @@ const App: React.FC = () => {
   // 打开快讯链接
   const handleOpenTelegraph = (telegraph: Telegraph) => {
     if (telegraph.url) {
-      OpenURL(telegraph.url);
+      openURL(telegraph.url);
     }
     setShowTelegraphList(false);
   };
@@ -197,7 +263,7 @@ const App: React.FC = () => {
 
   // 初始化窗口最大化状态
   useEffect(() => {
-    WindowIsMaximised().then(setIsMaximized);
+    windowIsMaximised().then(setIsMaximized);
   }, []);
 
   if (loading) return <div className="h-screen w-screen flex items-center justify-center fin-app text-white">加载中...</div>;
@@ -288,30 +354,32 @@ const App: React.FC = () => {
               {marketStatus?.statusText || '加载中...'}
             </div>
           </div>
-          {/* 窗口控制按钮 */}
+          {/* 窗口控制按钮 - 仅在 Wails 模式下显示 */}
+          {isWailsEnv() && (
           <div className="flex items-center ml-2 border-l fin-divider pl-3">
             <button
-              onClick={() => WindowMinimize()}
+              onClick={() => windowMinimize()}
               className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors"
               title="最小化"
             >
               <Minus className="h-4 w-4" />
             </button>
             <button
-              onClick={() => { WindowMaximize(); setIsMaximized(!isMaximized); }}
+              onClick={() => { windowMaximize(); setIsMaximized(!isMaximized); }}
               className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors"
               title={isMaximized ? "还原" : "最大化"}
             >
               {isMaximized ? <Copy className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
             </button>
             <button
-              onClick={() => WindowClose()}
+              onClick={() => windowClose()}
               className="p-1.5 rounded hover:bg-red-500/80 text-slate-400 hover:text-white transition-colors"
               title="关闭"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
+          )}
         </div>
       </header>
 
