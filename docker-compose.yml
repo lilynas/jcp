@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  jcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    image: jcp:${VERSION:-latest}
+    container_name: jcp-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      # 持久化数据目录
+      - jcp-data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=8080
+      - JCP_DATA_DIR=/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # 资源限制 (可选)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  jcp-data:
+    driver: local

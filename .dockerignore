@@ -1,0 +1,60 @@
+# Git
+.git
+.gitignore
+
+# Build outputs
+build/bin
+jcp
+jcp.exe
+*.app
+
+# Dependencies (will be installed during build)
+node_modules
+frontend/node_modules
+
+# Frontend build output (will be rebuilt)
+frontend/dist
+
+# IDE and editors
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+!README.md
+AGENTS.md
+PLAN.md
+PROGRESS_REPORT.md
+CLAUDE.md
+
+# Local data
+data
+mcp-test-client
+
+# Test files
+*_test.go
+**/*_test.go
+
+# CI/CD
+.github
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
