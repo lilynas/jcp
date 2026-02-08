@@ -2,8 +2,25 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Stock } from '../types';
 import { searchStocks, StockSearchResult } from '../services/stockService';
 import { Search, TrendingUp, X } from 'lucide-react';
-import { WindowClose } from '../../wailsjs/go/main/App';
+import { isWailsEnv } from '../services/apiAdapter';
 import logo from '../assets/images/logo.png';
+
+// 动态加载 Wails API
+let wailsApp: { WindowClose: () => Promise<void> } | null = null;
+const getWailsApp = async () => {
+  if (!wailsApp && isWailsEnv()) {
+    wailsApp = await import('../../wailsjs/go/main/App');
+  }
+  return wailsApp;
+};
+
+// 关闭窗口 (仅 Wails 模式可用)
+const handleWindowClose = async () => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    app?.WindowClose();
+  }
+};
 
 interface WelcomePageProps {
   onAddStock: (stock: Stock) => void;
@@ -75,16 +92,18 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onAddStock }) => {
 
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center fin-app relative">
-      {/* 右上角关闭按钮 */}
-      <div className="absolute top-3 right-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <button
-          onClick={() => WindowClose()}
-          className="p-1.5 rounded hover:bg-red-500/80 text-slate-400 hover:text-white transition-colors"
-          title="关闭"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
+      {/* 右上角关闭按钮 - 仅 Wails 模式显示 */}
+      {isWailsEnv() && (
+        <div className="absolute top-3 right-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <button
+            onClick={handleWindowClose}
+            className="p-1.5 rounded hover:bg-red-500/80 text-slate-400 hover:text-white transition-colors"
+            title="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Logo 和标题 */}
       <div className="flex items-center gap-3 mb-8">

@@ -1,7 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { X, TrendingUp, RefreshCw, ExternalLink } from 'lucide-react';
-import { GetAllHotTrends, OpenURL } from '../../wailsjs/go/main/App';
+import { isWailsEnv, httpRequest } from '../services/apiAdapter';
 import { hottrend } from '../../wailsjs/go/models';
+
+// 动态加载 Wails API
+let wailsApp: { GetAllHotTrends: () => Promise<any>; OpenURL: (url: string) => Promise<void> } | null = null;
+const getWailsApp = async () => {
+  if (!wailsApp && isWailsEnv()) {
+    wailsApp = await import('../../wailsjs/go/main/App');
+  }
+  return wailsApp;
+};
+
+// 获取热点数据 (双模式)
+async function getAllHotTrends(): Promise<hottrend.HotTrendResult[]> {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app!.GetAllHotTrends();
+  } else {
+    return httpRequest<hottrend.HotTrendResult[]>('/api/hottrend');
+  }
+}
+
+// 打开URL (双模式)
+async function openURL(url: string): Promise<void> {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app!.OpenURL(url);
+  } else {
+    window.open(url, '_blank');
+  }
+}
 
 interface HotTrendDialogProps {
   isOpen: boolean;
@@ -17,7 +46,7 @@ export const HotTrendDialog: React.FC<HotTrendDialogProps> = ({ isOpen, onClose 
   const loadHotTrends = async () => {
     setLoading(true);
     try {
-      const data = await GetAllHotTrends();
+      const data = await getAllHotTrends();
       setResults(data || []);
       if (data && data.length > 0 && !selectedPlatform) {
         setSelectedPlatform(data[0].platform);
@@ -173,7 +202,7 @@ const HotItemList: React.FC<{
 const HotItemRow: React.FC<{ item: hottrend.HotItem }> = ({ item }) => {
   const handleClick = () => {
     if (item.url) {
-      OpenURL(item.url);
+      openURL(item.url);
     }
   };
 

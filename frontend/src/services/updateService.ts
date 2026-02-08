@@ -1,5 +1,4 @@
-import { CheckForUpdate, DoUpdate, RestartApp, GetCurrentVersion } from '../../wailsjs/go/main/App';
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
+import { isWailsEnv, httpRequest } from './apiAdapter';
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -16,23 +15,85 @@ export interface UpdateProgress {
   percent: number;
 }
 
+// 动态加载 Wails API
+let wailsApp: any = null;
+const getWailsApp = async () => {
+  if (!wailsApp && isWailsEnv()) {
+    wailsApp = await import('../../wailsjs/go/main/App');
+  }
+  return wailsApp;
+};
+
+// 动态加载 Wails 运行时
+let wailsRuntime: any = null;
+const getWailsRuntime = async () => {
+  if (!wailsRuntime && isWailsEnv()) {
+    wailsRuntime = await import('../../wailsjs/runtime/runtime');
+  }
+  return wailsRuntime;
+};
+
 export async function checkForUpdate(): Promise<UpdateInfo> {
-  return await CheckForUpdate();
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app.CheckForUpdate();
+  } else {
+    // Web 模式不支持更新
+    return {
+      hasUpdate: false,
+      latestVersion: '',
+      currentVersion: '',
+      releaseUrl: '',
+      releaseNotes: '',
+    };
+  }
 }
 
 export async function doUpdate(): Promise<string> {
-  return await DoUpdate();
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app.DoUpdate();
+  } else {
+    return 'Updates not supported in web mode';
+  }
 }
 
 export async function restartApp(): Promise<string> {
-  return await RestartApp();
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app.RestartApp();
+  } else {
+    // Web 模式下刷新页面
+    window.location.reload();
+    return 'ok';
+  }
 }
 
 export async function getCurrentVersion(): Promise<string> {
-  return await GetCurrentVersion();
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app.GetCurrentVersion();
+  } else {
+    return httpRequest<string>('/api/version');
+  }
 }
 
 export function onUpdateProgress(callback: (progress: UpdateProgress) => void): () => void {
-  EventsOn('update:progress', callback);
-  return () => EventsOff('update:progress');
+  if (!isWailsEnv()) {
+    // Web 模式不支持更新进度
+    return () => {};
+  }
+
+  let cleanup: (() => void) | undefined;
+  
+  getWailsRuntime().then(runtime => {
+    if (runtime) {
+      runtime.EventsOn('update:progress', callback);
+      cleanup = () => runtime.EventsOff('update:progress');
+    }
+  });
+
+  return () => {
+    if (cleanup) cleanup();
+  };
 }

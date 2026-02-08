@@ -5,7 +5,16 @@ import { StockSession, ChatMessage, sendMeetingMessage, MeetingMessageRequest, g
 import { MessageSquare, Loader2, Send, User, Users, X, Reply, Trash2, Wrench, CheckCircle2, AlertCircle, Copy, Check, RotateCcw, Pencil } from 'lucide-react';
 import { clearSessionMessages } from '../services/sessionService';
 import { NodeRenderer } from 'markstream-react';
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
+import { isWailsEnv } from '../services/apiAdapter';
+
+// 动态加载 Wails 运行时
+let wailsRuntime: { EventsOn: any; EventsOff: any } | null = null;
+const getWailsRuntime = async () => {
+  if (!wailsRuntime && isWailsEnv()) {
+    wailsRuntime = await import('../../wailsjs/runtime/runtime');
+  }
+  return wailsRuntime;
+};
 import { useMentionPicker } from '../hooks/useMentionPicker';
 import { useToast } from '../hooks/useToast';
 import 'markstream-react/index.css';
@@ -130,19 +139,27 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
   // 订阅会议消息事件（实时接收发言）
   useEffect(() => {
     if (!session?.stockCode) return;
+    if (!isWailsEnv()) return; // Web 模式下不订阅 Wails 事件
 
     const stockCode = session.stockCode;
     const eventName = `meeting:message:${stockCode}`;
-    const cleanup = EventsOn(eventName, (msg: ChatMessage) => {
-      // 检查是否已取消或切换了股票
-      if (meetingCancelledRef.current[stockCode]) return;
-      if (currentStockCodeRef.current === stockCode) {
-        setMessages(prev => [...prev, { ...msg, id: `msg-${Date.now()}-${Math.random()}`, timestamp: Date.now() }]);
-      }
+    let cleanup: (() => void) | undefined;
+
+    getWailsRuntime().then(runtime => {
+      if (!runtime) return;
+      cleanup = runtime.EventsOn(eventName, (msg: ChatMessage) => {
+        // 检查是否已取消或切换了股票
+        if (meetingCancelledRef.current[stockCode]) return;
+        if (currentStockCodeRef.current === stockCode) {
+          setMessages(prev => [...prev, { ...msg, id: `msg-${Date.now()}-${Math.random()}`, timestamp: Date.now() }]);
+        }
+      });
     });
 
     return () => {
-      EventsOff(eventName);
+      getWailsRuntime().then(runtime => {
+        if (runtime) runtime.EventsOff(eventName);
+      });
       if (cleanup) cleanup();
     };
   }, [session?.stockCode]);
@@ -150,45 +167,53 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
   // 订阅进度事件（工具调用、流式输出等）
   useEffect(() => {
     if (!session?.stockCode) return;
+    if (!isWailsEnv()) return; // Web 模式下不订阅 Wails 事件
 
     const stockCode = session.stockCode;
     const eventName = `meeting:progress:${stockCode}`;
-    const cleanup = EventsOn(eventName, (event: ProgressEvent) => {
-      // 检查是否已取消或切换了股票
-      if (meetingCancelledRef.current[stockCode]) return;
-      if (currentStockCodeRef.current !== stockCode) return;
+    let cleanup: (() => void) | undefined;
 
-      setProgress(prev => {
-        switch (event.type) {
-          case 'agent_start':
-            return {
-              currentAgent: event.agentId,
-              currentAgentName: event.agentName,
-              steps: [],
-              streamingText: '',
-            };
-          case 'agent_done':
-            return { ...prev, currentAgent: null, currentAgentName: null, steps: [], streamingText: '' };
-          case 'tool_call':
-            return {
-              ...prev,
-              steps: [...prev.steps, { type: 'tool_call', detail: event.detail || '', done: false }],
-            };
-          case 'tool_result':
-            const updatedSteps = prev.steps.map(s =>
-              s.type === 'tool_call' && s.detail === event.detail ? { ...s, done: true } : s
-            );
-            return { ...prev, steps: updatedSteps };
-          case 'streaming':
-            return { ...prev, streamingText: prev.streamingText + (event.content || '') };
-          default:
-            return prev;
-        }
+    getWailsRuntime().then(runtime => {
+      if (!runtime) return;
+      cleanup = runtime.EventsOn(eventName, (event: ProgressEvent) => {
+        // 检查是否已取消或切换了股票
+        if (meetingCancelledRef.current[stockCode]) return;
+        if (currentStockCodeRef.current !== stockCode) return;
+
+        setProgress(prev => {
+          switch (event.type) {
+            case 'agent_start':
+              return {
+                currentAgent: event.agentId,
+                currentAgentName: event.agentName,
+                steps: [],
+                streamingText: '',
+              };
+            case 'agent_done':
+              return { ...prev, currentAgent: null, currentAgentName: null, steps: [], streamingText: '' };
+            case 'tool_call':
+              return {
+                ...prev,
+                steps: [...prev.steps, { type: 'tool_call', detail: event.detail || '', done: false }],
+              };
+            case 'tool_result':
+              const updatedSteps = prev.steps.map(s =>
+                s.type === 'tool_call' && s.detail === event.detail ? { ...s, done: true } : s
+              );
+              return { ...prev, steps: updatedSteps };
+            case 'streaming':
+              return { ...prev, streamingText: prev.streamingText + (event.content || '') };
+            default:
+              return prev;
+          }
+        });
       });
     });
 
     return () => {
-      EventsOff(eventName);
+      getWailsRuntime().then(runtime => {
+        if (runtime) runtime.EventsOff(eventName);
+      });
       if (cleanup) cleanup();
     };
   }, [session?.stockCode]);
