@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -11,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +34,69 @@ var staticFiles embed.FS
 // Version 版本号，通过 ldflags 注入
 var Version = "dev"
 
+// ========== 认证相关 ==========
+
+// AuthConfig 认证配置
+type AuthConfig struct {
+	Password    string        // 登录密码 (从环境变量 JCP_PASSWORD 读取)
+	TokenExpiry time.Duration // Token 过期时间
+	AuthEnabled bool          // 是否启用认证
+}
+
+// SessionStore 会话存储
+type SessionStore struct {
+	mu       sync.RWMutex
+	sessions map[string]time.Time // token -> 过期时间
+}
+
+func NewSessionStore() *SessionStore {
+	return &SessionStore{
+		sessions: make(map[string]time.Time),
+	}
+}
+
+func (s *SessionStore) Create(expiry time.Duration) string {
+	token := generateToken()
+	s.mu.Lock()
+	s.sessions[token] = time.Now().Add(expiry)
+	s.mu.Unlock()
+	return token
+}
+
+func (s *SessionStore) Validate(token string) bool {
+	s.mu.RLock()
+	expiry, exists := s.sessions[token]
+	s.mu.RUnlock()
+	if !exists {
+		return false
+	}
+	if time.Now().After(expiry) {
+		s.Delete(token)
+		return false
+	}
+	return true
+}
+
+func (s *SessionStore) Delete(token string) {
+	s.mu.Lock()
+	delete(s.sessions, token)
+	s.mu.Unlock()
+}
+
+func (s *SessionStore) Refresh(token string, expiry time.Duration) {
+	s.mu.Lock()
+	if _, exists := s.sessions[token]; exists {
+		s.sessions[token] = time.Now().Add(expiry)
+	}
+	s.mu.Unlock()
+}
+
+func generateToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // Server 封装 Web 服务需要的服务
 type Server struct {
 	configService      *services.ConfigService
@@ -44,6 +110,10 @@ type Server struct {
 	toolRegistry       *tools.Registry
 	mcpManager         *mcp.Manager
 	memoryManager      *memory.Manager
+
+	// 认证相关
+	authConfig   AuthConfig
+	sessionStore *SessionStore
 }
 
 func main() {
@@ -58,8 +128,21 @@ func main() {
 	}
 	logger.SetGlobalLevel(logger.DEBUG)
 
+	// 认证配置
+	authConfig := AuthConfig{
+		Password:    os.Getenv("JCP_PASSWORD"),
+		TokenExpiry: 24 * time.Hour,
+		AuthEnabled: os.Getenv("JCP_PASSWORD") != "",
+	}
+
+	if authConfig.AuthEnabled {
+		log.Println("Authentication ENABLED (JCP_PASSWORD is set)")
+	} else {
+		log.Println("Authentication DISABLED (set JCP_PASSWORD to enable)")
+	}
+
 	// 初始化服务
-	srv, err := newServer(dataDir)
+	srv, err := newServer(dataDir, authConfig)
 	if err != nil {
 		log.Fatalf("Failed to init server: %v", err)
 	}
@@ -117,7 +200,7 @@ func getDataDir() string {
 	return "./data"
 }
 
-func newServer(dataDir string) (*Server, error) {
+func newServer(dataDir string, authConfig AuthConfig) (*Server, error) {
 	// 确保数据目录存在
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
@@ -191,28 +274,35 @@ func newServer(dataDir string) (*Server, error) {
 		toolRegistry:       toolRegistry,
 		mcpManager:         mcpManager,
 		memoryManager:      memoryManager,
+		authConfig:         authConfig,
+		sessionStore:       NewSessionStore(),
 	}, nil
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
-	// API 路由
-	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/watchlist", s.handleWatchlist)
-	mux.HandleFunc("/api/stock/realtime", s.handleStockRealtime)
-	mux.HandleFunc("/api/stock/kline", s.handleKLine)
-	mux.HandleFunc("/api/stock/orderbook", s.handleOrderBook)
-	mux.HandleFunc("/api/stock/search", s.handleSearchStocks)
-	mux.HandleFunc("/api/agents", s.handleAgents)
-	mux.HandleFunc("/api/session", s.handleSession)
-	mux.HandleFunc("/api/session/messages", s.handleSessionMessages)
-	mux.HandleFunc("/api/news/telegraph", s.handleTelegraph)
-	mux.HandleFunc("/api/hottrend", s.handleHotTrend)
-	mux.HandleFunc("/api/hottrend/platforms", s.handleHotTrendPlatforms)
-	mux.HandleFunc("/api/tools", s.handleTools)
-	mux.HandleFunc("/api/mcp/servers", s.handleMCPServers)
-	mux.HandleFunc("/api/mcp/status", s.handleMCPStatus)
-	mux.HandleFunc("/api/version", s.handleVersion)
+	// 公开路由 (无需认证)
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/version", s.handleVersion)
+	mux.HandleFunc("/api/auth/login", s.handleLogin)
+	mux.HandleFunc("/api/auth/logout", s.handleLogout)
+	mux.HandleFunc("/api/auth/status", s.handleAuthStatus)
+
+	// 受保护的 API 路由 (需要认证)
+	mux.HandleFunc("/api/config", s.authMiddleware(s.handleConfig))
+	mux.HandleFunc("/api/watchlist", s.authMiddleware(s.handleWatchlist))
+	mux.HandleFunc("/api/stock/realtime", s.authMiddleware(s.handleStockRealtime))
+	mux.HandleFunc("/api/stock/kline", s.authMiddleware(s.handleKLine))
+	mux.HandleFunc("/api/stock/orderbook", s.authMiddleware(s.handleOrderBook))
+	mux.HandleFunc("/api/stock/search", s.authMiddleware(s.handleSearchStocks))
+	mux.HandleFunc("/api/agents", s.authMiddleware(s.handleAgents))
+	mux.HandleFunc("/api/session", s.authMiddleware(s.handleSession))
+	mux.HandleFunc("/api/session/messages", s.authMiddleware(s.handleSessionMessages))
+	mux.HandleFunc("/api/news/telegraph", s.authMiddleware(s.handleTelegraph))
+	mux.HandleFunc("/api/hottrend", s.authMiddleware(s.handleHotTrend))
+	mux.HandleFunc("/api/hottrend/platforms", s.authMiddleware(s.handleHotTrendPlatforms))
+	mux.HandleFunc("/api/tools", s.authMiddleware(s.handleTools))
+	mux.HandleFunc("/api/mcp/servers", s.authMiddleware(s.handleMCPServers))
+	mux.HandleFunc("/api/mcp/status", s.authMiddleware(s.handleMCPStatus))
 
 	// 静态文件服务 (前端)
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -222,6 +312,144 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	} else {
 		mux.Handle("/", spaHandler(http.FileServer(http.FS(staticFS))))
 	}
+}
+
+// ========== 认证中间件 ==========
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 如果未启用认证，直接放行
+		if !s.authConfig.AuthEnabled {
+			next(w, r)
+			return
+		}
+
+		// 从 Cookie 或 Header 获取 token
+		token := ""
+		if cookie, err := r.Cookie("jcp_token"); err == nil {
+			token = cookie.Value
+		}
+		if token == "" {
+			token = r.Header.Get("Authorization")
+			if strings.HasPrefix(token, "Bearer ") {
+				token = strings.TrimPrefix(token, "Bearer ")
+			}
+		}
+
+		// 验证 token
+		if token == "" || !s.sessionStore.Validate(token) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		// 刷新 token 过期时间
+		s.sessionStore.Refresh(token, s.authConfig.TokenExpiry)
+
+		next(w, r)
+	}
+}
+
+// ========== 认证 API ==========
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// 如果未启用认证，直接返回成功
+	if !s.authConfig.AuthEnabled {
+		respondJSON(w, map[string]interface{}{
+			"success":      true,
+			"authRequired": false,
+		})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	// 验证密码
+	if req.Password != s.authConfig.Password {
+		respondError(w, http.StatusUnauthorized, "密码错误")
+		return
+	}
+
+	// 创建会话
+	token := s.sessionStore.Create(s.authConfig.TokenExpiry)
+
+	// 设置 Cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "jcp_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   int(s.authConfig.TokenExpiry.Seconds()),
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	respondJSON(w, map[string]interface{}{
+		"success": true,
+		"token":   token,
+	})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// 从 Cookie 获取 token 并删除
+	if cookie, err := r.Cookie("jcp_token"); err == nil {
+		s.sessionStore.Delete(cookie.Value)
+	}
+
+	// 清除 Cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "jcp_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+
+	respondJSON(w, map[string]string{"status": "success"})
+}
+
+func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	// 检查是否需要认证
+	authRequired := s.authConfig.AuthEnabled
+	authenticated := false
+
+	if authRequired {
+		// 检查当前是否已登录
+		token := ""
+		if cookie, err := r.Cookie("jcp_token"); err == nil {
+			token = cookie.Value
+		}
+		if token == "" {
+			token = r.Header.Get("Authorization")
+			if strings.HasPrefix(token, "Bearer ") {
+				token = strings.TrimPrefix(token, "Bearer ")
+			}
+		}
+		authenticated = token != "" && s.sessionStore.Validate(token)
+	} else {
+		authenticated = true
+	}
+
+	respondJSON(w, map[string]interface{}{
+		"authRequired":  authRequired,
+		"authenticated": authenticated,
+	})
 }
 
 // SPA 处理器：所有非 API 请求返回 index.html

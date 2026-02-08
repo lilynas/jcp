@@ -19,6 +19,8 @@ services:
       - TZ=Asia/Shanghai
       - PORT=8080
       - JCP_DATA_DIR=/app/data
+      # 设置密码启用认证 (留空则禁用认证)
+      - JCP_PASSWORD=${JCP_PASSWORD:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
       interval: 30s
