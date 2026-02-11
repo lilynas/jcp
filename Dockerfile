@@ -58,11 +58,8 @@ COPY --from=backend-builder /app/jcp-server /app/jcp-server
 # Copy embedded stock data (if exists)
 COPY --from=backend-builder /app/internal/embed /app/internal/embed
 
-# Create data directory
-RUN mkdir -p /app/data && chown -R nobody:nobody /app
-
-# Use non-root user
-USER nobody
+# Create data directory with proper permissions
+RUN mkdir -p /app/data/logs && chmod -R 777 /app/data
 
 # Expose port
 EXPOSE 8080
