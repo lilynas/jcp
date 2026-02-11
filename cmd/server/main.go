@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -315,6 +316,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/test", s.authMiddleware(s.handleAITest))
 	mux.HandleFunc("/api/mcp/servers", s.authMiddleware(s.handleMCPServers))
 	mux.HandleFunc("/api/mcp/status", s.authMiddleware(s.handleMCPStatus))
+	mux.HandleFunc("/api/longhubang/list", s.authMiddleware(s.handleLongHuBangList))
+	mux.HandleFunc("/api/longhubang/detail", s.authMiddleware(s.handleLongHuBangDetail))
 
 	// 静态文件服务 (前端)
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -756,6 +759,52 @@ func (s *Server) handleAITest(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("AI 连接测试成功 [%s]", config.Name)
 	respondJSON(w, "success")
+}
+
+func (s *Server) handleLongHuBangList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	if pageSize <= 0 {
+		pageSize = 30
+	}
+	pageNumber, _ := strconv.Atoi(r.URL.Query().Get("pageNumber"))
+	if pageNumber <= 0 {
+		pageNumber = 1
+	}
+	tradeDate := r.URL.Query().Get("tradeDate")
+
+	result, err := s.longHuBangService.GetLongHuBangList(pageSize, pageNumber, tradeDate)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, result)
+}
+
+func (s *Server) handleLongHuBangDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	tradeDate := r.URL.Query().Get("tradeDate")
+
+	if code == "" {
+		respondError(w, http.StatusBadRequest, "code parameter is required")
+		return
+	}
+
+	details, err := s.longHuBangService.GetStockDetail(code, tradeDate)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, details)
 }
 
 func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {

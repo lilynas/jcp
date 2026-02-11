@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, TrendingUp, RefreshCw, Calendar } from 'lucide-react';
-import { GetLongHuBangList, GetLongHuBangDetail } from '../../wailsjs/go/main/App';
-import { models } from '../../wailsjs/go/models';
+import { getLongHuBangList, getLongHuBangDetail, LongHuBangItem, LongHuBangDetail } from '../services/configService';
 
 interface LongHuBangDialogProps {
   isOpen: boolean;
@@ -19,11 +18,11 @@ const getDefaultTradeDate = (): string => {
 };
 
 export const LongHuBangDialog: React.FC<LongHuBangDialogProps> = ({ isOpen, onClose }) => {
-  const [items, setItems] = useState<models.LongHuBangItem[]>([]);
+  const [items, setItems] = useState<LongHuBangItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<models.LongHuBangItem | null>(null);
-  const [details, setDetails] = useState<models.LongHuBangDetail[]>([]);
+  const [selectedItem, setSelectedItem] = useState<LongHuBangItem | null>(null);
+  const [details, setDetails] = useState<LongHuBangDetail[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [tradeDate, setTradeDate] = useState('');
   const [pageNumber, setPageNumber] = useState(1);
@@ -37,7 +36,7 @@ export const LongHuBangDialog: React.FC<LongHuBangDialogProps> = ({ isOpen, onCl
       setLoading(true);
     }
     try {
-      const result = await GetLongHuBangList(pageSize, page, date);
+      const result = await getLongHuBangList(pageSize, page, date);
       if (result) {
         const newItems = result.items || [];
         if (append) {
@@ -167,13 +166,13 @@ const DialogHeader: React.FC<{
 
 // 列表组件
 const ItemList: React.FC<{
-  items: models.LongHuBangItem[];
+  items: LongHuBangItem[];
   loading: boolean;
   loadingMore: boolean;
   hasMore: boolean;
-  selectedItem: models.LongHuBangItem | null;
-  onSelect: (item: models.LongHuBangItem) => void;
-  setDetails: (details: models.LongHuBangDetail[]) => void;
+  selectedItem: LongHuBangItem | null;
+  onSelect: (item: LongHuBangItem) => void;
+  setDetails: (details: LongHuBangDetail[]) => void;
   setDetailLoading: (loading: boolean) => void;
   onLoadMore: () => void;
 }> = ({ items, loading, loadingMore, hasMore, selectedItem, onSelect, setDetails, setDetailLoading, onLoadMore }) => {
@@ -188,11 +187,11 @@ const ItemList: React.FC<{
     }
   };
 
-  const handleSelect = async (item: models.LongHuBangItem) => {
+  const handleSelect = async (item: LongHuBangItem) => {
     onSelect(item);
     setDetailLoading(true);
     try {
-      const data = await GetLongHuBangDetail(item.code, item.tradeDate);
+      const data = await getLongHuBangDetail(item.code, item.tradeDate);
       setDetails(data || []);
     } finally {
       setDetailLoading(false);
@@ -266,7 +265,7 @@ const ItemList: React.FC<{
 // 营业部行组件
 const BrokerRow: React.FC<{
   index: number;
-  detail: models.LongHuBangDetail;
+  detail: LongHuBangDetail;
   type: 'buy' | 'sell';
   formatAmount: (amt: number) => string;
 }> = ({ index, detail, type, formatAmount }) => {
@@ -290,7 +289,7 @@ const BrokerRow: React.FC<{
 // 营业部列表组件
 const BrokerSection: React.FC<{
   title: string;
-  details: models.LongHuBangDetail[];
+  details: LongHuBangDetail[];
   type: 'buy' | 'sell';
   formatAmount: (amt: number) => string;
 }> = ({ title, details, type, formatAmount }) => (
@@ -327,7 +326,7 @@ const StatCard: React.FC<{
 
 // 股票头部信息
 const StockHeader: React.FC<{
-  item: models.LongHuBangItem;
+  item: LongHuBangItem;
   formatAmount: (amt: number) => string;
 }> = ({ item, formatAmount }) => (
   <div className="mb-5">
@@ -355,8 +354,8 @@ const StockHeader: React.FC<{
 
 // 详情面板组件
 const DetailPanel: React.FC<{
-  item: models.LongHuBangItem | null;
-  details: models.LongHuBangDetail[];
+  item: LongHuBangItem | null;
+  details: LongHuBangDetail[];
   loading: boolean;
 }> = ({ item, details, loading }) => {
   const formatAmount = (amt: number) => {

@@ -73,3 +73,65 @@ export const testAIConnection = async (config: any): Promise<string> => {
     body: JSON.stringify(config),
   });
 };
+
+// 龙虎榜数据类型
+export interface LongHuBangItem {
+  tradeDate: string;
+  code: string;
+  secuCode?: string;
+  name: string;
+  closePrice: number;
+  changePercent: number;
+  netBuyAmt: number;
+  buyAmt: number;
+  sellAmt: number;
+  totalAmt?: number;
+  turnoverRate: number;
+  freeCap?: number;
+  reason: string;
+  reasonDetail?: string;
+  accumAmount?: number;
+  dealRatio: number;
+  netRatio?: number;
+  d1Change: number;
+  d2Change?: number;
+  d5Change: number;
+  d10Change: number;
+  securityType?: string;
+}
+
+export interface LongHuBangDetail {
+  rank: number;
+  operName: string;
+  buyAmt: number;
+  buyPercent: number;
+  sellAmt: number;
+  sellPercent: number;
+  netAmt?: number;
+  direction: string;
+}
+
+export interface LongHuBangListResult {
+  items: LongHuBangItem[];
+  total: number;
+}
+
+// 获取龙虎榜列表
+export const getLongHuBangList = async (pageSize: number, pageNumber: number, tradeDate: string): Promise<LongHuBangListResult> => {
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.GetLongHuBangList(pageSize, pageNumber, tradeDate);
+  }
+  const params = new URLSearchParams({ pageSize: String(pageSize), pageNumber: String(pageNumber), tradeDate });
+  return httpRequest<LongHuBangListResult>(`/api/longhubang/list?${params}`);
+};
+
+// 获取龙虎榜详情
+export const getLongHuBangDetail = async (code: string, tradeDate: string): Promise<LongHuBangDetail[]> => {
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.GetLongHuBangDetail(code, tradeDate);
+  }
+  const params = new URLSearchParams({ code, tradeDate });
+  return httpRequest<LongHuBangDetail[]>(`/api/longhubang/detail?${params}`);
+};
