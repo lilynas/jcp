@@ -242,6 +242,7 @@ export namespace models {
 	    timeout: number;
 	    isDefault: boolean;
 	    useResponses: boolean;
+	    sendParams: boolean;
 	    project: string;
 	    location: string;
 	    credentialsJson: string;
@@ -263,6 +264,7 @@ export namespace models {
 	        this.timeout = source["timeout"];
 	        this.isDefault = source["isDefault"];
 	        this.useResponses = source["useResponses"];
+	        this.sendParams = source["sendParams"];
 	        this.project = source["project"];
 	        this.location = source["location"];
 	        this.credentialsJson = source["credentialsJson"];

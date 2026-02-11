@@ -311,7 +311,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hottrend", s.authMiddleware(s.handleHotTrend))
 	mux.HandleFunc("/api/hottrend/platforms", s.authMiddleware(s.handleHotTrendPlatforms))
 	mux.HandleFunc("/api/tools", s.authMiddleware(s.handleTools))
-	mux.HandleFunc("/api/ai/test", s.authMiddleware(s.handleAITest))
+	// mux.HandleFunc("/api/ai/test", s.authMiddleware(s.handleAITest)) // Temporarily commented out
 	mux.HandleFunc("/api/mcp/servers", s.authMiddleware(s.handleMCPServers))
 	mux.HandleFunc("/api/mcp/status", s.authMiddleware(s.handleMCPStatus))
 
