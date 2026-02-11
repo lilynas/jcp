@@ -5,12 +5,20 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24-blue.svg)](https://golang.org)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://reactjs.org)
 [![Wails](https://img.shields.io/badge/Wails-v2-red.svg)](https://wails.io)
+[![Docker](https://img.shields.io/badge/Docker-Supported-blue.svg)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-0.2.0-orange.svg)](https://github.com/run-bigpig/jcp/releases)
 
 ## 项目简介
 
-韭菜盘是一款基于 Wails 框架开发的跨平台桌面应用，集成了多个 AI 大模型（OpenAI、Google Gemini、DeepSeek、Kimi、GLM 等 OpenAI 兼容接口），通过多 Agent 协作讨论的方式，为用户提供专业的股票分析和投资建议。
+韭菜盘是一款基于 Wails 框架开发的跨平台桌面应用，同时提供 Web 服务器模式，集成了多个 AI 大模型（OpenAI、Google Gemini、DeepSeek、Kimi、GLM 等 OpenAI 兼容接口），通过多 Agent 协作讨论的方式，为用户提供专业的股票分析和投资建议。
+
+### 运行模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| **桌面端** | Wails 构建的跨平台桌面应用 | 本地使用，功能完整 |
+| **Web 端** | 基于 HTTP 的 Web 服务器 | 远程访问，Docker 部署 |
 
 ### 核心特性
 
@@ -21,20 +29,23 @@
 - **实时行情** - 股票实时数据、K线图表、盘口深度一应俱全
 - **热点舆情** - 聚合百度、抖音、B站、头条等平台热点趋势
 - **研报服务** - 专业研究报告查询和智能分析
+- **龙虎榜数据** - 实时获取龙虎榜交易数据与营业部买卖详情
 - **MCP 扩展** - 支持 Model Context Protocol，可扩展更多工具能力
 - **布局持久化** - 自动保存窗口和面板布局，下次启动自动恢复
+- **双模式支持** - 同时支持桌面端和 Web 端部署
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| **框架** | Wails v2 (Go + Web 混合桌面应用) |
+| **框架** | Wails v2 (Go + Web 混合桌面应用) / Go HTTP Server |
 | **后端** | Go 1.24 |
 | **前端** | React 18 + TypeScript + Vite |
 | **UI** | TailwindCSS + Lucide Icons |
 | **图表** | Recharts |
 | **AI** | OpenAI / Gemini / DeepSeek / Kimi / GLM 等 |
 | **分词** | GSE (纯 Go 实现，无 CGO 依赖) |
+| **部署** | Docker 多阶段构建 |
 
 ## 功能展示
 
@@ -49,18 +60,20 @@
 
 ### 核心功能模块
 
-| 模块 | 功能描述 |
-|------|----------|
-| 📈 **股票行情** | 实时行情数据、多周期K线、盘口深度 |
-| ⭐ **自选管理** | 添加/删除自选股、实时监控 |
-| 🤖 **AI 智库** | 多 Agent 协作分析、智能问答 |
-| 🎯 **策略管理** | 策略配置、Agent 组合、独立 AI 配置 |
-| 🔥 **热点舆情** | 百度/抖音/B站/头条热点聚合 |
-| 📊 **研报服务** | 专业研报查询与分析 |
-| 💬 **会议室** | Agent 多轮讨论、MCP 工具调用 |
-| 🧠 **记忆系统** | 按股票隔离的长期记忆、历史摘要、关键事实提取 |
-| ✨ **提示词增强** | AI 驱动的提示词优化 |
-| 🔌 **连接测试** | AI 配置连通性验证 |
+| 模块 | 功能描述 | 桌面端 | Web 端 |
+|------|----------|--------|--------|
+| 📈 **股票行情** | 实时行情数据、多周期K线、盘口深度 | ✅ | ✅ |
+| ⭐ **自选管理** | 添加/删除自选股、实时监控 | ✅ | ✅ |
+| 🤖 **AI 智库** | 多 Agent 协作分析、智能问答 | ✅ | ✅ |
+| 🎯 **策略管理** | 策略配置、Agent 组合、独立 AI 配置 | ✅ | ✅ |
+| 🔥 **热点舆情** | 百度/抖音/B站/头条热点聚合 | ✅ | ✅ |
+| 📊 **研报服务** | 专业研报查询与分析 | ✅ | ✅ |
+| 🐲 **龙虎榜** | 实时龙虎榜数据与营业部买卖详情 | ✅ | ✅ |
+| 💬 **会议室** | Agent 多轮讨论、MCP 工具调用 | ✅ | ✅ |
+| 🧠 **记忆系统** | 按股票隔离的长期记忆、历史摘要、关键事实提取 | ✅ | ✅ |
+| ✨ **提示词增强** | AI 驱动的提示词优化 | ✅ | ✅ |
+| 🔌 **连接测试** | AI 配置连通性验证 | ✅ | ✅ |
+| 🔄 **软件更新** | 自动检查并安装更新 | ✅ | ❌ |
 
 ## 快速开始
 
@@ -99,7 +112,7 @@ go mod download
 wails dev
 ```
 
-### 构建发布版本
+### 构建桌面端
 
 ```bash
 # 构建当前平台
@@ -113,6 +126,34 @@ wails build -platform darwin/amd64
 
 # 构建 Linux 版本
 wails build -platform linux/amd64
+```
+
+### 构建 Web 服务器
+
+```bash
+# 先构建前端
+cd frontend && npm run build && cd ..
+
+# 复制前端资源到服务器目录
+cp -r frontend/dist/* cmd/server/static/
+
+# 构建 Web 服务器二进制文件
+cd cmd/server && go build -o ../../jcp-server .
+```
+
+### Docker 部署
+
+```bash
+# 构建 Docker 镜像
+docker build -t jcp:latest .
+
+# 运行容器
+docker run -d \
+  -p 8080:8080 \
+  -v $(pwd)/data:/app/data \
+  -e JCP_PASSWORD=your_password \
+  --name jcp \
+  jcp:latest
 ```
 
 ## 配置说明
@@ -129,10 +170,14 @@ wails build -platform linux/amd64
 ## 项目结构
 
 ```
-ccjc/
-├── main.go                 # 应用入口
-├── app.go                  # 后端核心逻辑
+jcp/
+├── main.go                 # Wails 应用入口
+├── app.go                  # Wails 后端核心逻辑
 ├── wails.json              # Wails 配置
+├── cmd/
+│   └── server/             # Web 服务器
+│       ├── main.go         # HTTP 服务器入口
+│       └── static/         # 前端静态资源
 ├── frontend/               # 前端项目
 │   ├── src/
 │   │   ├── components/     # React 组件
@@ -141,10 +186,11 @@ ccjc/
 │   └── package.json
 ├── internal/               # Go 后端模块
 │   ├── adk/                # AI 开发工具包
-│   ├── services/           # 业务服务（策略管理等）
+│   ├── services/           # 业务服务
 │   ├── models/             # 数据模型
 │   ├── agent/              # Agent 系统
 │   └── meeting/            # 会议室系统
+├── Dockerfile              # Docker 构建配置
 └── data/                   # 数据存储
     ├── config.json         # 应用配置
     ├── strategies.json     # 策略配置
