@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/run-bigpig/jcp/internal/adk"
 	"github.com/run-bigpig/jcp/internal/adk/mcp"
 	"github.com/run-bigpig/jcp/internal/adk/tools"
 	"github.com/run-bigpig/jcp/internal/agent"
@@ -311,7 +312,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hottrend", s.authMiddleware(s.handleHotTrend))
 	mux.HandleFunc("/api/hottrend/platforms", s.authMiddleware(s.handleHotTrendPlatforms))
 	mux.HandleFunc("/api/tools", s.authMiddleware(s.handleTools))
-	// mux.HandleFunc("/api/ai/test", s.authMiddleware(s.handleAITest)) // Temporarily commented out
+	mux.HandleFunc("/api/ai/test", s.authMiddleware(s.handleAITest))
 	mux.HandleFunc("/api/mcp/servers", s.authMiddleware(s.handleMCPServers))
 	mux.HandleFunc("/api/mcp/status", s.authMiddleware(s.handleMCPStatus))
 
@@ -732,6 +733,29 @@ func (s *Server) handleHotTrend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, s.toolRegistry.GetAllToolInfos())
+}
+
+func (s *Server) handleAITest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var config models.AIConfig
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	factory := adk.NewModelFactory()
+	if err := factory.TestConnection(context.Background(), &config); err != nil {
+		log.Printf("AI 连接测试失败 [%s]: %v", config.Name, err)
+		respondJSON(w, err.Error())
+		return
+	}
+
+	log.Printf("AI 连接测试成功 [%s]", config.Name)
+	respondJSON(w, "success")
 }
 
 func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
