@@ -74,7 +74,8 @@ export async function getCurrentVersion(): Promise<string> {
     const app = await getWailsApp();
     return app.GetCurrentVersion();
   } else {
-    return httpRequest<string>('/api/version');
+    const response = await httpRequest<{version: string}>('/api/version');
+    return response.version;
   }
 }
 
