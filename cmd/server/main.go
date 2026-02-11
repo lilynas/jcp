@@ -100,17 +100,18 @@ func generateToken() string {
 
 // Server 封装 Web 服务需要的服务
 type Server struct {
-	configService      *services.ConfigService
-	marketService      *services.MarketService
-	newsService        *services.NewsService
-	hotTrendService    *hottrend.HotTrendService
-	meetingService     *meeting.Service
-	sessionService     *services.SessionService
-	agentConfigService *services.AgentConfigService
-	agentContainer     *agent.Container
-	toolRegistry       *tools.Registry
-	mcpManager         *mcp.Manager
-	memoryManager      *memory.Manager
+	configService     *services.ConfigService
+	marketService     *services.MarketService
+	newsService       *services.NewsService
+	hotTrendService   *hottrend.HotTrendService
+	meetingService    *meeting.Service
+	sessionService    *services.SessionService
+	strategyService   *services.StrategyService
+	agentContainer    *agent.Container
+	toolRegistry      *tools.Registry
+	mcpManager        *mcp.Manager
+	memoryManager     *memory.Manager
+	longHuBangService *services.LongHuBangService
 
 	// 认证相关
 	authConfig   AuthConfig
@@ -219,8 +220,11 @@ func newServer(dataDir string, authConfig AuthConfig) (*Server, error) {
 	marketService := services.NewMarketService()
 	newsService := services.NewNewsService()
 
+	// 初始化龙虎榜服务
+	longHuBangService := services.NewLongHuBangService()
+
 	// 初始化工具注册中心
-	toolRegistry := tools.NewRegistry(marketService, newsService, configService, researchReportService, hotTrendSvc)
+	toolRegistry := tools.NewRegistry(marketService, newsService, configService, researchReportService, hotTrendSvc, longHuBangService)
 
 	// 初始化 MCP 管理器
 	mcpManager := mcp.NewManager()
@@ -256,27 +260,28 @@ func newServer(dataDir string, authConfig AuthConfig) (*Server, error) {
 	// 初始化Session服务
 	sessionService := services.NewSessionService(dataDir)
 
-	// 初始化Agent配置服务和容器
-	agentConfigService := services.NewAgentConfigService(dataDir)
+	// 初始化策略服务和容器
+	strategyService := services.NewStrategyService(dataDir)
 	agentContainer := agent.NewContainer()
-	agentContainer.LoadAgents(agentConfigService.GetAllAgents())
+	agentContainer.LoadAgents(strategyService.GetAllAgents())
 
 	log.Println("All services initialized")
 
 	return &Server{
-		configService:      configService,
-		marketService:      marketService,
-		newsService:        newsService,
-		hotTrendService:    hotTrendSvc,
-		meetingService:     meetingService,
-		sessionService:     sessionService,
-		agentConfigService: agentConfigService,
-		agentContainer:     agentContainer,
-		toolRegistry:       toolRegistry,
-		mcpManager:         mcpManager,
-		memoryManager:      memoryManager,
-		authConfig:         authConfig,
-		sessionStore:       NewSessionStore(),
+		configService:     configService,
+		marketService:     marketService,
+		newsService:       newsService,
+		hotTrendService:   hotTrendSvc,
+		meetingService:    meetingService,
+		sessionService:    sessionService,
+		strategyService:   strategyService,
+		agentContainer:    agentContainer,
+		toolRegistry:      toolRegistry,
+		mcpManager:        mcpManager,
+		memoryManager:     memoryManager,
+		longHuBangService: longHuBangService,
+		authConfig:        authConfig,
+		sessionStore:      NewSessionStore(),
 	}, nil
 }
 
@@ -306,6 +311,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hottrend", s.authMiddleware(s.handleHotTrend))
 	mux.HandleFunc("/api/hottrend/platforms", s.authMiddleware(s.handleHotTrendPlatforms))
 	mux.HandleFunc("/api/tools", s.authMiddleware(s.handleTools))
+	mux.HandleFunc("/api/ai/test", s.authMiddleware(s.handleAITest))
 	mux.HandleFunc("/api/mcp/servers", s.authMiddleware(s.handleMCPServers))
 	mux.HandleFunc("/api/mcp/status", s.authMiddleware(s.handleMCPStatus))
 
@@ -610,30 +616,30 @@ func (s *Server) handleSearchStocks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		respondJSON(w, s.agentConfigService.GetAllAgents())
+		respondJSON(w, s.strategyService.GetAllAgents())
 	case "POST":
-		var config models.AgentConfig
-		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		var agent models.StrategyAgent
+		if err := json.NewDecoder(r.Body).Decode(&agent); err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.agentConfigService.AddAgent(config); err != nil {
+		if err := s.strategyService.AddAgentToActiveStrategy(agent); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.agentContainer.LoadAgents(s.agentConfigService.GetAllAgents())
+		s.agentContainer.LoadAgents(s.strategyService.GetAllAgents())
 		respondJSON(w, map[string]string{"status": "success"})
 	case "PUT":
-		var config models.AgentConfig
-		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		var agent models.StrategyAgent
+		if err := json.NewDecoder(r.Body).Decode(&agent); err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.agentConfigService.UpdateAgent(config); err != nil {
+		if err := s.strategyService.UpdateAgentInActiveStrategy(agent); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.agentContainer.LoadAgents(s.agentConfigService.GetAllAgents())
+		s.agentContainer.LoadAgents(s.strategyService.GetAllAgents())
 		respondJSON(w, map[string]string{"status": "success"})
 	case "DELETE":
 		id := r.URL.Query().Get("id")
@@ -641,11 +647,11 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "id required")
 			return
 		}
-		if err := s.agentConfigService.DeleteAgent(id); err != nil {
+		if err := s.strategyService.DeleteAgentFromActiveStrategy(id); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.agentContainer.LoadAgents(s.agentConfigService.GetAllAgents())
+		s.agentContainer.LoadAgents(s.strategyService.GetAllAgents())
 		respondJSON(w, map[string]string{"status": "success"})
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -888,7 +894,7 @@ func (s *Server) handleMeetingSend(w http.ResponseWriter, r *http.Request) {
 	// 判断模式并执行
 	if len(req.MentionIds) == 0 {
 		// 智能模式
-		allAgents := s.agentConfigService.GetAllAgents()
+		allAgents := s.strategyService.GetAllAgents()
 		chatReq := meeting.ChatRequest{
 			Stock:     stock,
 			Query:     req.Content,
@@ -902,7 +908,7 @@ func (s *Server) handleMeetingSend(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// 直接 @ 指定专家模式
-		agentConfigs := s.agentConfigService.GetAgentsByIDs(req.MentionIds)
+		agentConfigs := s.strategyService.GetAgentsByIDs(req.MentionIds)
 		if len(agentConfigs) == 0 {
 			sendSSEError(w, flusher, "未找到指定的专家")
 			return

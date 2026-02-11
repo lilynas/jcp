@@ -1,17 +1,15 @@
 package models
 
-// AgentConfig Agent配置（可通过配置文件添加）
+// AgentConfig Agent配置（从策略转换而来）
 type AgentConfig struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Role        string   `json:"role"`
 	Avatar      string   `json:"avatar"`
 	Color       string   `json:"color"`
-	Instruction string   `json:"instruction"` // Agent系统指令
-	Tools       []string `json:"tools"`       // 可用工具列表
-	MCPServers  []string `json:"mcpServers"`  // 关联的 MCP 服务器 ID 列表
-	Priority    int      `json:"priority"`    // 显示优先级
-	IsBuiltin   bool     `json:"isBuiltin"`   // 是否内置Agent
-	Enabled     bool     `json:"enabled"`     // 是否全局启用
-	ProviderID  string   `json:"providerId"`  // 关联的Provider ID（空则使用默认）
+	Instruction string   `json:"instruction"`
+	Tools       []string `json:"tools"`
+	MCPServers  []string `json:"mcpServers"`
+	Enabled     bool     `json:"enabled"`
+	AIConfigID  string   `json:"aiConfigId"` // 可选，空则用默认AI
 }

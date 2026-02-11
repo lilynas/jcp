@@ -86,6 +86,86 @@ export namespace hottrend {
 
 export namespace main {
 	
+	export class EnhancePromptRequest {
+	    originalPrompt: string;
+	    agentRole: string;
+	    agentName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnhancePromptRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.originalPrompt = source["originalPrompt"];
+	        this.agentRole = source["agentRole"];
+	        this.agentName = source["agentName"];
+	    }
+	}
+	export class EnhancePromptResponse {
+	    success: boolean;
+	    enhancedPrompt?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnhancePromptResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.enhancedPrompt = source["enhancedPrompt"];
+	        this.error = source["error"];
+	    }
+	}
+	export class GenerateStrategyRequest {
+	    prompt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GenerateStrategyRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompt = source["prompt"];
+	    }
+	}
+	export class GenerateStrategyResponse {
+	    success: boolean;
+	    error?: string;
+	    strategy?: models.Strategy;
+	    reasoning?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GenerateStrategyResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.error = source["error"];
+	        this.strategy = this.convertValues(source["strategy"], models.Strategy);
+	        this.reasoning = source["reasoning"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MeetingMessageRequest {
 	    stockCode: string;
 	    content: string;
@@ -160,8 +240,6 @@ export namespace models {
 	    maxTokens: number;
 	    temperature: number;
 	    timeout: number;
-	    httpProxy: string;
-	    httpProxyEnabled: boolean;
 	    isDefault: boolean;
 	    useResponses: boolean;
 	    project: string;
@@ -183,8 +261,6 @@ export namespace models {
 	        this.maxTokens = source["maxTokens"];
 	        this.temperature = source["temperature"];
 	        this.timeout = source["timeout"];
-	        this.httpProxy = source["httpProxy"];
-	        this.httpProxyEnabled = source["httpProxyEnabled"];
 	        this.isDefault = source["isDefault"];
 	        this.useResponses = source["useResponses"];
 	        this.project = source["project"];
@@ -201,10 +277,8 @@ export namespace models {
 	    instruction: string;
 	    tools: string[];
 	    mcpServers: string[];
-	    priority: number;
-	    isBuiltin: boolean;
 	    enabled: boolean;
-	    providerId: string;
+	    aiConfigId: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AgentConfig(source);
@@ -220,10 +294,42 @@ export namespace models {
 	        this.instruction = source["instruction"];
 	        this.tools = source["tools"];
 	        this.mcpServers = source["mcpServers"];
-	        this.priority = source["priority"];
-	        this.isBuiltin = source["isBuiltin"];
 	        this.enabled = source["enabled"];
-	        this.providerId = source["providerId"];
+	        this.aiConfigId = source["aiConfigId"];
+	    }
+	}
+	export class LayoutConfig {
+	    leftPanelWidth: number;
+	    rightPanelWidth: number;
+	    bottomPanelHeight: number;
+	    windowWidth: number;
+	    windowHeight: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LayoutConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.leftPanelWidth = source["leftPanelWidth"];
+	        this.rightPanelWidth = source["rightPanelWidth"];
+	        this.bottomPanelHeight = source["bottomPanelHeight"];
+	        this.windowWidth = source["windowWidth"];
+	        this.windowHeight = source["windowHeight"];
+	    }
+	}
+	export class ProxyConfig {
+	    mode: string;
+	    customUrl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.customUrl = source["customUrl"];
 	    }
 	}
 	export class MemoryConfig {
@@ -275,12 +381,15 @@ export namespace models {
 	    }
 	}
 	export class AppConfig {
-	    refreshInterval: number;
 	    theme: string;
 	    aiConfigs: AIConfig[];
 	    defaultAiId: string;
+	    strategyAiId: string;
+	    moderatorAiId: string;
 	    mcpServers: MCPServerConfig[];
 	    memory: MemoryConfig;
+	    proxy: ProxyConfig;
+	    layout: LayoutConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -288,12 +397,15 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.refreshInterval = source["refreshInterval"];
 	        this.theme = source["theme"];
 	        this.aiConfigs = this.convertValues(source["aiConfigs"], AIConfig);
 	        this.defaultAiId = source["defaultAiId"];
+	        this.strategyAiId = source["strategyAiId"];
+	        this.moderatorAiId = source["moderatorAiId"];
 	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);
 	        this.memory = this.convertValues(source["memory"], MemoryConfig);
+	        this.proxy = this.convertValues(source["proxy"], ProxyConfig);
+	        this.layout = this.convertValues(source["layout"], LayoutConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -377,6 +489,87 @@ export namespace models {
 	    }
 	}
 	
+	export class LongHuBangDetail {
+	    rank: number;
+	    operName: string;
+	    buyAmt: number;
+	    buyPercent: number;
+	    sellAmt: number;
+	    sellPercent: number;
+	    netAmt: number;
+	    direction: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LongHuBangDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rank = source["rank"];
+	        this.operName = source["operName"];
+	        this.buyAmt = source["buyAmt"];
+	        this.buyPercent = source["buyPercent"];
+	        this.sellAmt = source["sellAmt"];
+	        this.sellPercent = source["sellPercent"];
+	        this.netAmt = source["netAmt"];
+	        this.direction = source["direction"];
+	    }
+	}
+	export class LongHuBangItem {
+	    tradeDate: string;
+	    code: string;
+	    secuCode: string;
+	    name: string;
+	    closePrice: number;
+	    changePercent: number;
+	    netBuyAmt: number;
+	    buyAmt: number;
+	    sellAmt: number;
+	    totalAmt: number;
+	    turnoverRate: number;
+	    freeCap: number;
+	    reason: string;
+	    reasonDetail: string;
+	    accumAmount: number;
+	    dealRatio: number;
+	    netRatio: number;
+	    d1Change: number;
+	    d2Change: number;
+	    d5Change: number;
+	    d10Change: number;
+	    securityType: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LongHuBangItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tradeDate = source["tradeDate"];
+	        this.code = source["code"];
+	        this.secuCode = source["secuCode"];
+	        this.name = source["name"];
+	        this.closePrice = source["closePrice"];
+	        this.changePercent = source["changePercent"];
+	        this.netBuyAmt = source["netBuyAmt"];
+	        this.buyAmt = source["buyAmt"];
+	        this.sellAmt = source["sellAmt"];
+	        this.totalAmt = source["totalAmt"];
+	        this.turnoverRate = source["turnoverRate"];
+	        this.freeCap = source["freeCap"];
+	        this.reason = source["reason"];
+	        this.reasonDetail = source["reasonDetail"];
+	        this.accumAmount = source["accumAmount"];
+	        this.dealRatio = source["dealRatio"];
+	        this.netRatio = source["netRatio"];
+	        this.d1Change = source["d1Change"];
+	        this.d2Change = source["d2Change"];
+	        this.d5Change = source["d5Change"];
+	        this.d10Change = source["d10Change"];
+	        this.securityType = source["securityType"];
+	    }
+	}
+	
 	
 	export class OrderBookItem {
 	    price: number;
@@ -428,6 +621,7 @@ export namespace models {
 		    return a;
 		}
 	}
+	
 	
 	export class Stock {
 	    symbol: string;
@@ -521,11 +715,119 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class StrategyAgent {
+	    id: string;
+	    name: string;
+	    role: string;
+	    avatar: string;
+	    color: string;
+	    instruction: string;
+	    tools: string[];
+	    mcpServers: string[];
+	    enabled: boolean;
+	    aiConfigId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StrategyAgent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.role = source["role"];
+	        this.avatar = source["avatar"];
+	        this.color = source["color"];
+	        this.instruction = source["instruction"];
+	        this.tools = source["tools"];
+	        this.mcpServers = source["mcpServers"];
+	        this.enabled = source["enabled"];
+	        this.aiConfigId = source["aiConfigId"];
+	    }
+	}
+	export class Strategy {
+	    id: string;
+	    name: string;
+	    description: string;
+	    color: string;
+	    agents: StrategyAgent[];
+	    isBuiltin: boolean;
+	    source: string;
+	    sourceMeta: string;
+	    createdAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Strategy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.color = source["color"];
+	        this.agents = this.convertValues(source["agents"], StrategyAgent);
+	        this.isBuiltin = source["isBuiltin"];
+	        this.source = source["source"];
+	        this.sourceMeta = source["sourceMeta"];
+	        this.createdAt = source["createdAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
 export namespace services {
 	
+	export class LongHuBangListResult {
+	    items: models.LongHuBangItem[];
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LongHuBangListResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], models.LongHuBangItem);
+	        this.total = source["total"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class StockSearchResult {
 	    symbol: string;
 	    name: string;

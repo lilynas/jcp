@@ -1,4 +1,5 @@
 // Package mcp 提供 MCP (Model Context Protocol) 集成功能
+// 采用 adk-go 官方设计，直接使用 mcptoolset
 package mcp
 
 import (
@@ -33,24 +34,53 @@ type ToolInfo struct {
 }
 
 // Manager MCP 服务管理器
+// 负责配置管理和缓存 mcptoolset，生命周期绑定主 context
 type Manager struct {
-	mu      sync.RWMutex
-	configs map[string]*models.MCPServerConfig
+	ctx      context.Context
+	mu       sync.RWMutex
+	configs  map[string]*models.MCPServerConfig
+	toolsets map[string]tool.Toolset // 缓存已创建的 toolset
 }
 
-// NewManager 创建 MCP 管理器
+// NewManager 创建 MCP 管理器（需要调用 Initialize 绑定 context）
 func NewManager() *Manager {
 	return &Manager{
-		configs: make(map[string]*models.MCPServerConfig),
+		configs:  make(map[string]*models.MCPServerConfig),
+		toolsets: make(map[string]tool.Toolset),
 	}
 }
 
-// LoadConfigs 加载 MCP 服务器配置（延迟初始化，不预先创建连接）
+// Initialize 初始化管理器，绑定主 context 并预创建所有已配置的 toolset
+func (m *Manager) Initialize(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ctx = ctx
+
+	// 预初始化所有已配置的 toolset
+	for id, cfg := range m.configs {
+		if _, ok := m.toolsets[id]; ok {
+			continue
+		}
+		ts, err := m.createToolsetLocked(cfg)
+		if err != nil {
+			log.Warn("预初始化 toolset 失败 [%s]: %v", cfg.Name, err)
+			continue
+		}
+		m.toolsets[id] = ts
+		log.Info("预初始化 toolset 成功: %s", cfg.Name)
+	}
+	return nil
+}
+
+// LoadConfigs 加载 MCP 服务器配置（会清空已缓存的 toolset，并在已初始化时自动创建新 toolset）
 func (m *Manager) LoadConfigs(configs []models.MCPServerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 清空旧配置和缓存
 	m.configs = make(map[string]*models.MCPServerConfig)
+	m.toolsets = make(map[string]tool.Toolset)
 
 	for i := range configs {
 		cfg := &configs[i]
@@ -58,7 +88,20 @@ func (m *Manager) LoadConfigs(configs []models.MCPServerConfig) error {
 			continue
 		}
 		m.configs[cfg.ID] = cfg
-		log.Info("MCP 服务器配置已加载: %s (延迟初始化)", cfg.Name)
+		log.Info("加载 MCP 配置: %s (%s)", cfg.Name, cfg.TransportType)
+	}
+
+	// 如果已绑定 context，则预初始化所有 toolset
+	if m.ctx != nil {
+		for id, cfg := range m.configs {
+			ts, err := m.createToolsetLocked(cfg)
+			if err != nil {
+				log.Warn("初始化 toolset 失败 [%s]: %v", cfg.Name, err)
+				continue
+			}
+			m.toolsets[id] = ts
+			log.Info("初始化 toolset 成功: %s", cfg.Name)
+		}
 	}
 	return nil
 }
@@ -67,7 +110,7 @@ func (m *Manager) LoadConfigs(configs []models.MCPServerConfig) error {
 func createTransport(cfg *models.MCPServerConfig) mcp.Transport {
 	switch cfg.TransportType {
 	case models.MCPTransportSSE:
-		log.Warn("创建 SSE 传输 [%s]: %s (已废弃，建议改为 http)", cfg.Name, cfg.Endpoint)
+		log.Warn("创建 SSE 传输 [%s]: %s (已废弃)", cfg.Name, cfg.Endpoint)
 		return &mcp.SSEClientTransport{Endpoint: cfg.Endpoint}
 	case models.MCPTransportCommand:
 		log.Info("创建 Command 传输 [%s]: %s %v", cfg.Name, cfg.Command, cfg.Args)
@@ -81,86 +124,90 @@ func createTransport(cfg *models.MCPServerConfig) mcp.Transport {
 	}
 }
 
-// createToolset 为指定配置创建新的 toolset
-func (m *Manager) createToolset(cfg *models.MCPServerConfig) (tool.Toolset, error) {
+// CreateToolset 为指定配置创建 mcptoolset（直接使用 adk-go 官方实现）
+func (m *Manager) CreateToolset(cfg *models.MCPServerConfig) (tool.Toolset, error) {
+	return m.createToolsetLocked(cfg)
+}
+
+// createToolsetLocked 内部方法，创建 toolset（调用方需持有锁）
+func (m *Manager) createToolsetLocked(cfg *models.MCPServerConfig) (tool.Toolset, error) {
 	ts, err := mcptoolset.New(mcptoolset.Config{
-		Transport:  createTransport(cfg),
-		ToolFilter: tool.StringPredicate(cfg.ToolFilter),
+		Transport: createTransport(cfg),
 	})
 	if err != nil {
+		log.Error("创建 mcptoolset 失败 [%s]: %v", cfg.Name, err)
 		return nil, err
 	}
-	log.Info("MCP toolset 已创建: %s", cfg.Name)
+	log.Debug("mcptoolset 已创建: %s", cfg.Name)
 	return ts, nil
 }
 
-// GetToolset 获取指定 MCP 服务器的 toolset（按需创建新连接）
-func (m *Manager) GetToolset(serverID string) (tool.Toolset, bool) {
-	m.mu.RLock()
-	cfg, ok := m.configs[serverID]
-	m.mu.RUnlock()
-
-	if !ok {
-		log.Warn("服务器配置不存在: %s", serverID)
-		return nil, false
-	}
-
-	// 每次调用时创建新的 toolset，避免连接超时问题
-	ts, err := m.createToolset(cfg)
-	if err != nil {
-		log.Error("创建 toolset 失败 [%s]: %v", cfg.Name, err)
-		return nil, false
-	}
-
-	log.Debug("获取 toolset: %s", serverID)
-	return ts, true
-}
-
-// GetAllToolsets 获取所有已启用的 toolsets（按需创建新连接）
-func (m *Manager) GetAllToolsets() []tool.Toolset {
-	m.mu.RLock()
-	configs := make([]*models.MCPServerConfig, 0, len(m.configs))
-	for _, cfg := range m.configs {
-		configs = append(configs, cfg)
-	}
-	m.mu.RUnlock()
-
-	result := make([]tool.Toolset, 0, len(configs))
-	for _, cfg := range configs {
-		ts, err := m.createToolset(cfg)
-		if err != nil {
-			log.Error("创建 toolset 失败 [%s]: %v", cfg.Name, err)
-			continue
-		}
-		result = append(result, ts)
-	}
-	log.Debug("获取所有 toolsets, 数量: %d", len(result))
-	return result
-}
-
-// GetToolsetsByIDs 根据 ID 列表获取 toolsets（按需创建新连接）
+// GetToolsetsByIDs 根据 ID 列表获取 toolsets（使用缓存）
 func (m *Manager) GetToolsetsByIDs(ids []string) []tool.Toolset {
-	m.mu.RLock()
-	configs := make(map[string]*models.MCPServerConfig)
-	for _, id := range ids {
-		if cfg, ok := m.configs[id]; ok {
-			configs[id] = cfg
-		}
-	}
-	m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	log.Info("请求获取 toolsets, IDs: %v", ids)
 	var result []tool.Toolset
-	for id, cfg := range configs {
-		ts, err := m.createToolset(cfg)
+	for _, id := range ids {
+		// 先检查缓存
+		if ts, ok := m.toolsets[id]; ok {
+			log.Debug("使用缓存的 toolset: %s", id)
+			result = append(result, ts)
+			continue
+		}
+
+		// 缓存未命中，创建新的
+		cfg, ok := m.configs[id]
+		if !ok {
+			log.Warn("MCP 配置不存在: %s", id)
+			continue
+		}
+		ts, err := m.createToolsetLocked(cfg)
 		if err != nil {
 			log.Error("创建 toolset 失败 [%s]: %v", id, err)
 			continue
 		}
+		// 存入缓存
+		m.toolsets[id] = ts
 		result = append(result, ts)
-		log.Debug("创建 toolset: %s", id)
 	}
 	log.Info("返回 toolsets 数量: %d", len(result))
+	return result
+}
+
+// GetAllToolsets 获取所有已启用的 toolsets（使用缓存）
+func (m *Manager) GetAllToolsets() []tool.Toolset {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []tool.Toolset
+	for id, cfg := range m.configs {
+		// 先检查缓存
+		if ts, ok := m.toolsets[id]; ok {
+			result = append(result, ts)
+			continue
+		}
+		// 创建并缓存
+		ts, err := m.createToolsetLocked(cfg)
+		if err != nil {
+			continue
+		}
+		m.toolsets[id] = ts
+		result = append(result, ts)
+	}
+	return result
+}
+
+// GetAllStatus 获取所有服务器状态
+func (m *Manager) GetAllStatus() []ServerStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]ServerStatus, 0, len(m.configs))
+	for id := range m.configs {
+		result = append(result, ServerStatus{ID: id})
+	}
 	return result
 }
 
@@ -172,7 +219,6 @@ func (m *Manager) TestConnection(serverID string) *ServerStatus {
 	m.mu.RUnlock()
 
 	if !ok {
-		log.Warn("测试连接失败: 服务器未配置 %s", serverID)
 		return &ServerStatus{ID: serverID, Connected: false, Error: "服务器未配置"}
 	}
 
@@ -189,18 +235,6 @@ func (m *Manager) TestConnection(serverID string) *ServerStatus {
 	}
 	log.Info("测试连接成功: %s", cfg.Name)
 	return &ServerStatus{ID: serverID, Connected: true}
-}
-
-// GetAllStatus 获取所有服务器状态
-func (m *Manager) GetAllStatus() []ServerStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make([]ServerStatus, 0, len(m.configs))
-	for id := range m.configs {
-		result = append(result, ServerStatus{ID: id})
-	}
-	return result
 }
 
 // GetServerTools 获取指定 MCP 服务器的工具列表
@@ -224,7 +258,6 @@ func (m *Manager) GetServerTools(serverID string) ([]ToolInfo, error) {
 	}
 	defer session.Close()
 
-	// 获取工具列表
 	toolsResp, err := session.ListTools(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -253,7 +286,6 @@ func (m *Manager) GetToolInfosByServerIDs(serverIDs []string) []ToolInfo {
 			continue
 		}
 		if tools != nil {
-			log.Debug("服务器 %s 返回 %d 个工具", id, len(tools))
 			allTools = append(allTools, tools...)
 		}
 	}

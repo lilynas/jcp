@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { AgentConfig } from '../services/agentConfigService';
+import { AgentConfig } from '../services/strategyService';
 
 interface UseMentionPickerProps {
   allAgents: AgentConfig[];

@@ -10,7 +10,7 @@ import (
 )
 
 // toOpenAIChatCompletionRequest 将 ADK 请求转换为 OpenAI 请求
-func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string) (openai.ChatCompletionRequest, error) {
+func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string, sendParams bool) (openai.ChatCompletionRequest, error) {
 	openaiMessages := make([]openai.ChatCompletionMessage, 0, len(req.Contents))
 	for _, content := range req.Contents {
 		msgs, err := toOpenAIChatCompletionMessage(content)
@@ -48,17 +48,20 @@ func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string) (ope
 
 	// 应用配置
 	if req.Config != nil {
-		if req.Config.Temperature != nil {
-			openaiReq.Temperature = *req.Config.Temperature
-		}
-		if req.Config.MaxOutputTokens > 0 {
-			openaiReq.MaxTokens = int(req.Config.MaxOutputTokens)
-		}
-		if req.Config.TopP != nil {
-			openaiReq.TopP = *req.Config.TopP
-		}
-		if len(req.Config.StopSequences) > 0 {
-			openaiReq.Stop = req.Config.StopSequences
+		// 仅在开启高级参数时发送 temperature/top_p/max_tokens
+		if sendParams {
+			if req.Config.Temperature != nil {
+				openaiReq.Temperature = *req.Config.Temperature
+			}
+			if req.Config.MaxOutputTokens > 0 {
+				openaiReq.MaxCompletionTokens = int(req.Config.MaxOutputTokens)
+			}
+			if req.Config.TopP != nil {
+				openaiReq.TopP = *req.Config.TopP
+			}
+			if len(req.Config.StopSequences) > 0 {
+				openaiReq.Stop = req.Config.StopSequences
+			}
 		}
 
 		// 处理系统指令

@@ -41,13 +41,19 @@ var (
 	ErrNoAgents         = errors.New("没有可用的专家")
 )
 
+// AIConfigResolver AI配置解析器函数类型
+// 根据 AIConfigID 返回对应的 AI 配置，如果 ID 为空或找不到则返回默认配置
+type AIConfigResolver func(aiConfigID string) *models.AIConfig
+
 // Service 会议室服务，编排多专家并行分析
 type Service struct {
-	modelFactory   *adk.ModelFactory
-	toolRegistry   *tools.Registry
-	mcpManager     *mcp.Manager
-	memoryManager  *memory.Manager
-	memoryAIConfig *models.AIConfig // 记忆管理使用的 LLM 配置
+	modelFactory       *adk.ModelFactory
+	toolRegistry       *tools.Registry
+	mcpManager         *mcp.Manager
+	memoryManager      *memory.Manager
+	memoryAIConfig     *models.AIConfig // 记忆管理使用的 LLM 配置
+	moderatorAIConfig  *models.AIConfig // 意图分析(小韭菜)使用的 LLM 配置
+	aiConfigResolver   AIConfigResolver // AI配置解析器
 }
 
 // NewServiceFull 创建完整配置的会议室服务
@@ -67,6 +73,16 @@ func (s *Service) SetMemoryManager(memMgr *memory.Manager) {
 // SetMemoryAIConfig 设置记忆管理使用的 LLM 配置
 func (s *Service) SetMemoryAIConfig(aiConfig *models.AIConfig) {
 	s.memoryAIConfig = aiConfig
+}
+
+// SetModeratorAIConfig 设置意图分析(小韭菜)使用的 LLM 配置
+func (s *Service) SetModeratorAIConfig(aiConfig *models.AIConfig) {
+	s.moderatorAIConfig = aiConfig
+}
+
+// SetAIConfigResolver 设置 AI 配置解析器
+func (s *Service) SetAIConfigResolver(resolver AIConfigResolver) {
+	s.aiConfigResolver = resolver
 }
 
 // ChatRequest 聊天请求
@@ -115,7 +131,7 @@ func (s *Service) SendMessage(ctx context.Context, aiConfig *models.AIConfig, re
 	}
 	log.Info("model created successfully")
 
-	return s.runAgentsParallel(ctx, llm, req)
+	return s.runAgentsParallel(ctx, llm, aiConfig, req)
 }
 
 // RunSmartMeeting 智能会议模式（小韭菜编排）
@@ -148,7 +164,21 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 	}
 
 	var responses []ChatResponse
-	moderator := NewModerator(llm)
+
+	// 创建 Moderator LLM（优先使用独立配置）
+	var moderatorLLM model.LLM
+	if s.moderatorAIConfig != nil {
+		moderatorLLM, err = s.modelFactory.CreateModel(meetingCtx, s.moderatorAIConfig)
+		if err != nil {
+			log.Warn("create moderator LLM error, fallback to default: %v", err)
+			moderatorLLM = llm
+		} else {
+			log.Debug("using dedicated moderator LLM: %s", s.moderatorAIConfig.ModelName)
+		}
+	} else {
+		moderatorLLM = llm
+	}
+	moderator := NewModerator(moderatorLLM)
 
 	// 设置 LLM 到记忆管理器（启用摘要功能）
 	if s.memoryManager != nil {
@@ -240,7 +270,6 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 
 	// 第1轮：专家串行发言，后一个参考前面的内容
 	var history []DiscussionEntry
-	builder := s.createBuilder(llm)
 
 	for i, agentCfg := range selectedAgents {
 		// 检查会议是否已超时
@@ -252,6 +281,23 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 		}
 
 		log.Debug("agent %d/%d: %s starting", i+1, len(selectedAgents), agentCfg.Name)
+
+		// 获取该专家的 AI 配置
+		agentAIConfig := aiConfig // 默认使用传入的配置
+		if s.aiConfigResolver != nil && agentCfg.AIConfigID != "" {
+			if resolved := s.aiConfigResolver(agentCfg.AIConfigID); resolved != nil {
+				agentAIConfig = resolved
+				log.Debug("agent %s using custom AI: %s", agentCfg.ID, resolved.ModelName)
+			}
+		}
+
+		// 为该专家创建 LLM
+		agentLLM, err := s.modelFactory.CreateModel(meetingCtx, agentAIConfig)
+		if err != nil {
+			log.Error("create agent LLM error: %v", err)
+			continue
+		}
+		builder := s.createBuilder(agentLLM, agentAIConfig)
 
 		// 发送专家开始事件
 		if progressCallback != nil {
@@ -393,7 +439,7 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 }
 
 // runAgentsParallel 并行运行多个 Agent（带超时控制）
-func (s *Service) runAgentsParallel(ctx context.Context, llm model.LLM, req ChatRequest) ([]ChatResponse, error) {
+func (s *Service) runAgentsParallel(ctx context.Context, defaultLLM model.LLM, defaultAIConfig *models.AIConfig, req ChatRequest) ([]ChatResponse, error) {
 	var (
 		wg        sync.WaitGroup
 		mu        sync.Mutex
@@ -404,13 +450,35 @@ func (s *Service) runAgentsParallel(ctx context.Context, llm model.LLM, req Chat
 	parallelCtx, cancel := context.WithTimeout(ctx, MeetingTimeout)
 	defer cancel()
 
-	builder := s.createBuilder(llm)
 	log.Debug("running %d agents in parallel", len(req.Agents))
 
 	for _, agentConfig := range req.Agents {
 		wg.Add(1)
 		go func(cfg models.AgentConfig) {
 			defer wg.Done()
+
+			// 获取该专家的 AI 配置
+			agentAIConfig := defaultAIConfig
+			if s.aiConfigResolver != nil && cfg.AIConfigID != "" {
+				if resolved := s.aiConfigResolver(cfg.AIConfigID); resolved != nil {
+					agentAIConfig = resolved
+					log.Debug("agent %s using custom AI: %s", cfg.ID, resolved.ModelName)
+				}
+			}
+
+			// 为该专家创建 LLM
+			var agentLLM model.LLM
+			var err error
+			if agentAIConfig == defaultAIConfig {
+				agentLLM = defaultLLM
+			} else {
+				agentLLM, err = s.modelFactory.CreateModel(parallelCtx, agentAIConfig)
+				if err != nil {
+					log.Error("create agent LLM error: %v", err)
+					return
+				}
+			}
+			builder := s.createBuilder(agentLLM, agentAIConfig)
 
 			// 单个 Agent 超时控制
 			agentCtx, agentCancel := context.WithTimeout(parallelCtx, AgentTimeout)
@@ -659,12 +727,12 @@ func (s *Service) runSingleAgentWithHistory(
 }
 
 // createBuilder 创建 ExpertAgentBuilder
-func (s *Service) createBuilder(llm model.LLM) *adk.ExpertAgentBuilder {
+func (s *Service) createBuilder(llm model.LLM, aiConfig *models.AIConfig) *adk.ExpertAgentBuilder {
 	if s.mcpManager != nil {
-		return adk.NewExpertAgentBuilderFull(llm, s.toolRegistry, s.mcpManager)
+		return adk.NewExpertAgentBuilderFull(llm, aiConfig, s.toolRegistry, s.mcpManager)
 	}
 	if s.toolRegistry != nil {
-		return adk.NewExpertAgentBuilderWithTools(llm, s.toolRegistry)
+		return adk.NewExpertAgentBuilderWithTools(llm, aiConfig, s.toolRegistry)
 	}
-	return adk.NewExpertAgentBuilder(llm)
+	return adk.NewExpertAgentBuilder(llm, aiConfig)
 }

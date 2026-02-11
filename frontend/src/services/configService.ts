@@ -14,6 +14,13 @@ export interface AppConfig {
   mcpServers?: any[];
   memory?: any;
   theme?: string;
+  layout?: {
+    leftPanelWidth: number;
+    rightPanelWidth: number;
+    bottomPanelHeight: number;
+    windowWidth: number;
+    windowHeight: number;
+  };
   [key: string]: any; // 允许其他属性
 }
 
@@ -53,4 +60,16 @@ export const getAvailableTools = async (): Promise<ToolInfo[]> => {
     return await api.GetAvailableTools();
   }
   return httpRequest<ToolInfo[]>('/api/tools');
+};
+
+// 测试 AI 配置连通性
+export const testAIConnection = async (config: any): Promise<string> => {
+  if (isWailsEnv()) {
+    const api = await getWailsApi();
+    return await api.TestAIConnection(config);
+  }
+  return httpRequest<string>('/api/ai/test', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
 };

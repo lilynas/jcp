@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Stock, KLineData } from '../types';
-import { getAgentConfigs, AgentConfig } from '../services/agentConfigService';
+import { getAgentConfigs, AgentConfig } from '../services/strategyService';
 import { StockSession, ChatMessage, sendMeetingMessage, MeetingMessageRequest, getSessionMessages, MeetingSSECallbacks } from '../services/sessionService';
-import { MessageSquare, Loader2, Send, User, Users, X, Reply, Trash2, Wrench, CheckCircle2, AlertCircle, Copy, Check, RotateCcw, Pencil } from 'lucide-react';
+import { MessageSquare, Loader2, Send, User, Users, X, Reply, Trash2, Wrench, CheckCircle2, AlertCircle, Copy, Check, RotateCcw, Pencil, Square } from 'lucide-react';
 import { clearSessionMessages } from '../services/sessionService';
 import { NodeRenderer } from 'markstream-react';
 import { isWailsEnv } from '../services/apiAdapter';
@@ -18,6 +18,24 @@ const getWailsRuntime = async () => {
 import { useMentionPicker } from '../hooks/useMentionPicker';
 import { useToast } from '../hooks/useToast';
 import 'markstream-react/index.css';
+
+// 动态加载 Wails App API
+let wailsApp: any = null;
+const getWailsApp = async () => {
+  if (!wailsApp && isWailsEnv()) {
+    wailsApp = await import('../../wailsjs/go/main/App');
+  }
+  return wailsApp;
+};
+
+// 取消会议 - 双模式支持
+const cancelMeetingApi = async (stockCode: string) => {
+  if (isWailsEnv()) {
+    const app = await getWailsApp();
+    return app?.CancelMeeting(stockCode);
+  }
+  // Web 模式暂不支持取消会议
+};
 
 // 进度事件类型
 interface ProgressEvent {
@@ -94,6 +112,11 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
 
   // 取消指定股票的会议
   const cancelMeeting = (stockCode: string) => {
+    // 调用后端取消 API
+    cancelMeetingApi(stockCode).catch((err: any) => {
+      console.error('[AgentRoom] 取消会议失败:', err);
+    });
+    // 前端状态重置
     meetingCancelledRef.current[stockCode] = true;
     setSimulatingMap(prev => ({ ...prev, [stockCode]: false }));
     setProgress({
@@ -102,16 +125,44 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
       steps: [],
       streamingText: '',
     });
+    showToast('讨论已停止', 'info');
   };
 
   // 加载Agent配置
-  useEffect(() => {
+  const loadAgents = () => {
     getAgentConfigs()
       .then(agents => setAllAgents(agents || []))
       .catch(err => {
         console.error('[AgentRoom] 加载Agent配置失败:', err);
         setAllAgents([]);
       });
+  };
+
+  // 初始加载Agent配置
+  useEffect(() => {
+    loadAgents();
+  }, []);
+
+  // 监听策略切换事件，重新加载Agent配置
+  useEffect(() => {
+    if (!isWailsEnv()) return;
+
+    let cleanup: (() => void) | undefined;
+
+    getWailsRuntime().then(runtime => {
+      if (!runtime) return;
+      cleanup = runtime.EventsOn('strategy:changed', () => {
+        console.log('[AgentRoom] 策略已切换，重新加载Agent配置');
+        loadAgents();
+      });
+    });
+
+    return () => {
+      getWailsRuntime().then(runtime => {
+        if (runtime) runtime.EventsOff('strategy:changed');
+      });
+      if (cleanup) cleanup();
+    };
   }, []);
 
   // 当Session变化时，从后端加载最新消息
@@ -439,7 +490,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
   };
 
   return (
-    <div className="relative flex flex-col h-full fin-panel border-l fin-divider w-96 shadow-xl shrink-0">
+    <div className="relative flex flex-col h-full fin-panel border-l fin-divider shadow-xl">
       {/* Header */}
       <div className="p-4 border-b fin-divider fin-panel-strong">
         <div className="flex items-center justify-between">
@@ -748,14 +799,25 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
                placeholder="直接提问或输入 @ 选择韭菜专家..."
                className="flex-1 fin-input rounded-lg px-4 py-2 text-sm placeholder-slate-500 border fin-divider"
             />
-            <button
-               type="submit"
-               disabled={isSimulating || !userQuery.trim()}
-               className="text-white p-2 rounded-lg transition-colors flex items-center justify-center w-10 h-10 disabled:opacity-50"
-               style={{ background: (isSimulating || !userQuery.trim()) ? '#334155' : `linear-gradient(to bottom right, var(--accent), var(--accent-2))` }}
-            >
-              {isSimulating ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
-            </button>
+            {isSimulating ? (
+              <button
+                type="button"
+                onClick={() => session?.stockCode && cancelMeeting(session.stockCode)}
+                className="text-white p-2 rounded-lg transition-colors flex items-center justify-center w-10 h-10 bg-red-500 hover:bg-red-400"
+                title="停止讨论"
+              >
+                <Square size={14} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!userQuery.trim()}
+                className="text-white p-2 rounded-lg transition-colors flex items-center justify-center w-10 h-10 disabled:opacity-50"
+                style={{ background: !userQuery.trim() ? '#334155' : `linear-gradient(to bottom right, var(--accent), var(--accent-2))` }}
+              >
+                <Send size={18} />
+              </button>
+            )}
           </form>
         </div>
         <div className="mt-1 text-center">

@@ -89,7 +89,11 @@ func (s *FileStorage) Delete(stockCode string) error {
 	defer s.mu.Unlock()
 
 	delete(s.cache, stockCode)
-	return os.Remove(s.getPath(stockCode))
+	err := os.Remove(s.getPath(stockCode))
+	if err != nil && os.IsNotExist(err) {
+		return nil // 文件不存在，无需删除
+	}
+	return err
 }
 
 // List 列出所有股票记忆

@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 
+	"github.com/run-bigpig/jcp/internal/adk"
 	"github.com/run-bigpig/jcp/internal/adk/mcp"
 	"github.com/run-bigpig/jcp/internal/adk/tools"
 	"github.com/run-bigpig/jcp/internal/agent"
@@ -12,6 +14,7 @@ import (
 	"github.com/run-bigpig/jcp/internal/meeting"
 	"github.com/run-bigpig/jcp/internal/memory"
 	"github.com/run-bigpig/jcp/internal/models"
+	"github.com/run-bigpig/jcp/internal/pkg/proxy"
 	"github.com/run-bigpig/jcp/internal/services"
 	"github.com/run-bigpig/jcp/internal/services/hottrend"
 
@@ -27,23 +30,25 @@ type App struct {
 	marketService      *services.MarketService
 	newsService        *services.NewsService
 	hotTrendService    *hottrend.HotTrendService
+	longHuBangService  *services.LongHuBangService
 	marketPusher       *services.MarketDataPusher
 	meetingService     *meeting.Service
 	sessionService     *services.SessionService
-	agentConfigService *services.AgentConfigService
+	strategyService    *services.StrategyService
 	agentContainer     *agent.Container
 	toolRegistry       *tools.Registry
 	mcpManager         *mcp.Manager
 	memoryManager      *memory.Manager
 	updateService      *services.UpdateService
+
+	// 会议取消管理
+	meetingCancels   map[string]context.CancelFunc
+	meetingCancelsMu sync.RWMutex
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
 	dataDir := getDataDir()
-
-	// 迁移旧数据目录（如果存在）
-	migrateDataDir(dataDir)
 
 	// 初始化文件日志
 	if err := logger.InitFileLogger(filepath.Join(dataDir, "logs")); err != nil {
@@ -69,8 +74,11 @@ func NewApp() *App {
 	marketService := services.NewMarketService()
 	newsService := services.NewNewsService()
 
+	// 初始化龙虎榜服务
+	longHuBangService := services.NewLongHuBangService()
+
 	// 初始化工具注册中心
-	toolRegistry := tools.NewRegistry(marketService, newsService, configService, researchReportService, hotTrendSvc)
+	toolRegistry := tools.NewRegistry(marketService, newsService, configService, researchReportService, hotTrendSvc, longHuBangService)
 
 	// 初始化 MCP 管理器
 	mcpManager := mcp.NewManager()
@@ -105,13 +113,26 @@ func NewApp() *App {
 		log.Info("Memory manager enabled")
 	}
 
+	// 设置 Moderator AI 配置
+	if configService.GetConfig().ModeratorAIID != "" {
+		for i := range configService.GetConfig().AIConfigs {
+			if configService.GetConfig().AIConfigs[i].ID == configService.GetConfig().ModeratorAIID {
+				meetingService.SetModeratorAIConfig(&configService.GetConfig().AIConfigs[i])
+				log.Info("Moderator LLM: %s", configService.GetConfig().AIConfigs[i].ModelName)
+				break
+			}
+		}
+	}
+
 	// 初始化Session服务
 	sessionService := services.NewSessionService(dataDir)
 
-	// 初始化Agent配置服务和容器
-	agentConfigService := services.NewAgentConfigService(dataDir)
+	// 初始化策略服务
+	strategyService := services.NewStrategyService(dataDir)
+
+	// 初始化Agent容器（直接从StrategyService获取数据）
 	agentContainer := agent.NewContainer()
-	agentContainer.LoadAgents(agentConfigService.GetAllAgents())
+	agentContainer.LoadAgents(strategyService.GetAllAgents())
 
 	// 初始化更新服务
 	updateService := services.NewUpdateService("run-bigpig", "jcp", Version)
@@ -123,14 +144,16 @@ func NewApp() *App {
 		marketService:      marketService,
 		newsService:        newsService,
 		hotTrendService:    hotTrendSvc,
+		longHuBangService:  longHuBangService,
 		meetingService:     meetingService,
 		sessionService:     sessionService,
-		agentConfigService: agentConfigService,
+		strategyService:    strategyService,
 		agentContainer:     agentContainer,
 		toolRegistry:       toolRegistry,
 		mcpManager:         mcpManager,
 		memoryManager:      memoryManager,
 		updateService:      updateService,
+		meetingCancels:     make(map[string]context.CancelFunc),
 	}
 }
 
@@ -142,112 +165,25 @@ func getDataDir() string {
 	return filepath.Join(userConfigDir, "jcp")
 }
 
-// migrateDataDir 迁移旧数据目录到新位置
-// 仅在新目录为空且旧目录存在时执行迁移
-func migrateDataDir(newDataDir string) {
-	oldDataDir := filepath.Join(".", "data")
-
-	// 检查旧目录是否存在
-	if _, err := os.Stat(oldDataDir); os.IsNotExist(err) {
-		return
-	}
-
-	// 如果新旧路径相同，无需迁移
-	absOld, _ := filepath.Abs(oldDataDir)
-	absNew, _ := filepath.Abs(newDataDir)
-	if absOld == absNew {
-		return
-	}
-
-	// 检查新目录是否已有数据（存在 config.json 表示已迁移）
-	if _, err := os.Stat(filepath.Join(newDataDir, "config.json")); err == nil {
-		return
-	}
-
-	log.Info("检测到旧数据目录，开始迁移: %s -> %s", oldDataDir, newDataDir)
-
-	// 确保新目录存在
-	if err := os.MkdirAll(newDataDir, 0755); err != nil {
-		log.Error("创建新数据目录失败: %v", err)
-		return
-	}
-
-	// 需要迁移的文件和目录
-	items := []string{
-		"config.json",
-		"agents.json",
-		"watchlist.json",
-		"stock_basic.json",
-		"sessions",
-		"memories",
-	}
-
-	for _, item := range items {
-		src := filepath.Join(oldDataDir, item)
-		dst := filepath.Join(newDataDir, item)
-
-		if _, err := os.Stat(src); os.IsNotExist(err) {
-			continue
-		}
-
-		if err := copyPath(src, dst); err != nil {
-			log.Error("迁移 %s 失败: %v", item, err)
-		} else {
-			log.Info("迁移成功: %s", item)
-		}
-	}
-
-	log.Info("数据迁移完成")
-}
-
-// copyPath 复制文件或目录
-func copyPath(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if info.IsDir() {
-		return copyDir(src, dst)
-	}
-	return copyFile(src, dst)
-}
-
-// copyFile 复制单个文件
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0644)
-}
-
-// copyDir 递归复制目录
-func copyDir(src, dst string) error {
-	if err := os.MkdirAll(dst, 0755); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if err := copyPath(srcPath, dstPath); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // startup is called when the app starts. The context is saved
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// 初始化代理配置
+	proxy.GetManager().SetConfig(&a.configService.GetConfig().Proxy)
+
+	// 初始化 MCP 管理器（绑定主 context，预创建 toolset）
+	if a.mcpManager != nil {
+		if err := a.mcpManager.Initialize(ctx); err != nil {
+			log.Warn("MCP 初始化失败: %v", err)
+		}
+	}
+
+	// 设置 Meeting 服务的 AI 配置解析器
+	if a.meetingService != nil {
+		a.meetingService.SetAIConfigResolver(a.getAIConfigByID)
+	}
 
 	// 初始化更新服务
 	if a.updateService != nil {
@@ -290,11 +226,22 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 			log.Warn("MCP reload error: %v", err)
 		}
 	}
+	// 更新代理配置
+	proxy.GetManager().SetConfig(&config.Proxy)
 	// 更新记忆管理器的 LLM 配置
 	if a.meetingService != nil && config.Memory.AIConfigID != "" {
 		for i := range config.AIConfigs {
 			if config.AIConfigs[i].ID == config.Memory.AIConfigID {
 				a.meetingService.SetMemoryAIConfig(&config.AIConfigs[i])
+				break
+			}
+		}
+	}
+	// 更新 Moderator AI 配置
+	if a.meetingService != nil && config.ModeratorAIID != "" {
+		for i := range config.AIConfigs {
+			if config.AIConfigs[i].ID == config.ModeratorAIID {
+				a.meetingService.SetModeratorAIConfig(&config.AIConfigs[i])
 				break
 			}
 		}
@@ -374,6 +321,21 @@ func (a *App) getDefaultAIConfig(config *models.AppConfig) *models.AIConfig {
 	return nil
 }
 
+// getAIConfigByID 根据ID获取AI配置，找不到则返回默认配置
+func (a *App) getAIConfigByID(aiConfigID string) *models.AIConfig {
+	config := a.configService.GetConfig()
+	// 如果指定了ID，尝试查找
+	if aiConfigID != "" {
+		for i := range config.AIConfigs {
+			if config.AIConfigs[i].ID == aiConfigID {
+				return &config.AIConfigs[i]
+			}
+		}
+	}
+	// 找不到则返回默认配置
+	return a.getDefaultAIConfig(config)
+}
+
 // ========== Session API ==========
 
 // GetOrCreateSession 获取或创建Session
@@ -423,37 +385,261 @@ func (a *App) UpdateStockPosition(stockCode string, shares int64, costPrice floa
 
 // ========== Agent Config API ==========
 
-// GetAgentConfigs 获取所有Agent配置
+// GetAgentConfigs 获取所有已启用的Agent配置
 func (a *App) GetAgentConfigs() []models.AgentConfig {
-	return a.agentConfigService.GetAllAgents()
+	return a.strategyService.GetEnabledAgents()
 }
 
-// AddAgentConfig 添加Agent配置
+// AddAgentConfig 添加Agent配置到当前策略
 func (a *App) AddAgentConfig(config models.AgentConfig) string {
-	if err := a.agentConfigService.AddAgent(config); err != nil {
+	agent := models.StrategyAgent{
+		ID:          config.ID,
+		Name:        config.Name,
+		Role:        config.Role,
+		Avatar:      config.Avatar,
+		Color:       config.Color,
+		Instruction: config.Instruction,
+		Tools:       config.Tools,
+		MCPServers:  config.MCPServers,
+		Enabled:     config.Enabled,
+	}
+	if err := a.strategyService.AddAgentToActiveStrategy(agent); err != nil {
 		return err.Error()
 	}
-	// 重新加载容器
-	a.agentContainer.LoadAgents(a.agentConfigService.GetAllAgents())
+	a.agentContainer.LoadAgents(a.strategyService.GetAllAgents())
 	return "success"
 }
 
-// UpdateAgentConfig 更新Agent配置
+// UpdateAgentConfig 更新当前策略中的Agent配置
 func (a *App) UpdateAgentConfig(config models.AgentConfig) string {
-	if err := a.agentConfigService.UpdateAgent(config); err != nil {
+	agent := models.StrategyAgent{
+		ID:          config.ID,
+		Name:        config.Name,
+		Role:        config.Role,
+		Avatar:      config.Avatar,
+		Color:       config.Color,
+		Instruction: config.Instruction,
+		Tools:       config.Tools,
+		MCPServers:  config.MCPServers,
+		Enabled:     config.Enabled,
+	}
+	if err := a.strategyService.UpdateAgentInActiveStrategy(agent); err != nil {
 		return err.Error()
 	}
-	a.agentContainer.LoadAgents(a.agentConfigService.GetAllAgents())
+	a.agentContainer.LoadAgents(a.strategyService.GetAllAgents())
 	return "success"
 }
 
-// DeleteAgentConfig 删除Agent配置
+// DeleteAgentConfig 从当前策略删除Agent配置
 func (a *App) DeleteAgentConfig(id string) string {
-	if err := a.agentConfigService.DeleteAgent(id); err != nil {
+	if err := a.strategyService.DeleteAgentFromActiveStrategy(id); err != nil {
 		return err.Error()
 	}
-	a.agentContainer.LoadAgents(a.agentConfigService.GetAllAgents())
+	a.agentContainer.LoadAgents(a.strategyService.GetAllAgents())
 	return "success"
+}
+
+// ========== Strategy API ==========
+
+// GetStrategies 获取所有策略
+func (a *App) GetStrategies() []models.Strategy {
+	return a.strategyService.GetAllStrategies()
+}
+
+// GetActiveStrategyID 获取当前激活策略ID
+func (a *App) GetActiveStrategyID() string {
+	return a.strategyService.GetActiveID()
+}
+
+// SetActiveStrategy 设置当前激活策略
+func (a *App) SetActiveStrategy(id string) string {
+	if err := a.strategyService.SetActiveStrategy(id); err != nil {
+		return err.Error()
+	}
+	// 重新加载Agent容器
+	a.agentContainer.LoadAgents(a.strategyService.GetAllAgents())
+	// 通知前端策略已切换
+	runtime.EventsEmit(a.ctx, "strategy:changed", id)
+	return "success"
+}
+
+// AddStrategy 添加策略
+func (a *App) AddStrategy(strategy models.Strategy) string {
+	if err := a.strategyService.AddStrategy(strategy); err != nil {
+		return err.Error()
+	}
+	return "success"
+}
+
+// UpdateStrategy 更新策略
+func (a *App) UpdateStrategy(strategy models.Strategy) string {
+	if err := a.strategyService.UpdateStrategy(strategy); err != nil {
+		return err.Error()
+	}
+	return "success"
+}
+
+// DeleteStrategy 删除策略
+func (a *App) DeleteStrategy(id string) string {
+	if err := a.strategyService.DeleteStrategy(id); err != nil {
+		return err.Error()
+	}
+	return "success"
+}
+
+// GenerateStrategyRequest AI生成策略请求
+type GenerateStrategyRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+// GenerateStrategyResponse AI生成策略响应
+type GenerateStrategyResponse struct {
+	Success   bool             `json:"success"`
+	Error     string           `json:"error,omitempty"`
+	Strategy  models.Strategy  `json:"strategy,omitempty"`
+	Reasoning string           `json:"reasoning,omitempty"`
+}
+
+// GenerateStrategy AI生成策略
+func (a *App) GenerateStrategy(req GenerateStrategyRequest) GenerateStrategyResponse {
+	// 获取策略生成AI配置（优先使用 StrategyAIID，否则使用默认）
+	config := a.configService.GetConfig()
+	var aiConfig *models.AIConfig
+	targetAIID := config.StrategyAIID
+	if targetAIID == "" {
+		targetAIID = config.DefaultAIID
+	}
+	for i := range config.AIConfigs {
+		if config.AIConfigs[i].ID == targetAIID {
+			aiConfig = &config.AIConfigs[i]
+			break
+		}
+	}
+	if aiConfig == nil && len(config.AIConfigs) > 0 {
+		aiConfig = &config.AIConfigs[0]
+	}
+	if aiConfig == nil {
+		return GenerateStrategyResponse{Success: false, Error: "未配置AI服务"}
+	}
+
+	// 创建LLM
+	ctx := context.Background()
+	factory := adk.NewModelFactory()
+	llm, err := factory.CreateModel(ctx, aiConfig)
+	if err != nil {
+		return GenerateStrategyResponse{Success: false, Error: err.Error()}
+	}
+
+	// 构建生成输入
+	input := services.GenerateInput{
+		Prompt: req.Prompt,
+	}
+
+	// 获取可用工具列表
+	for _, t := range a.toolRegistry.GetAllToolInfos() {
+		input.Tools = append(input.Tools, services.ToolInfoForGen{
+			Name:        t.Name,
+			Description: t.Description,
+		})
+	}
+
+	// 获取已启用的MCP服务器列表
+	for _, m := range config.MCPServers {
+		if m.Enabled {
+			// 获取该服务器的工具列表
+			var toolNames []string
+			if tools, err := a.mcpManager.GetServerTools(m.ID); err == nil {
+				for _, t := range tools {
+					toolNames = append(toolNames, t.Name)
+				}
+			}
+			input.MCPServers = append(input.MCPServers, services.MCPInfoForGen{
+				ID:    m.ID,
+				Name:  m.Name,
+				Tools: toolNames,
+			})
+		}
+	}
+
+	// 设置LLM并生成策略
+	a.strategyService.SetLLM(llm)
+	result, err := a.strategyService.Generate(ctx, input)
+	if err != nil {
+		return GenerateStrategyResponse{Success: false, Error: err.Error()}
+	}
+
+	// 保存策略
+	if err := a.strategyService.AddStrategy(result.Strategy); err != nil {
+		return GenerateStrategyResponse{Success: false, Error: err.Error()}
+	}
+
+	return GenerateStrategyResponse{
+		Success:   true,
+		Strategy:  result.Strategy,
+		Reasoning: result.Reasoning,
+	}
+}
+
+// EnhancePromptRequest 提示词增强请求
+type EnhancePromptRequest struct {
+	OriginalPrompt string `json:"originalPrompt"`
+	AgentRole      string `json:"agentRole"`
+	AgentName      string `json:"agentName"`
+}
+
+// EnhancePromptResponse 提示词增强响应
+type EnhancePromptResponse struct {
+	Success        bool   `json:"success"`
+	EnhancedPrompt string `json:"enhancedPrompt,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// EnhancePrompt 增强Agent提示词
+func (a *App) EnhancePrompt(req EnhancePromptRequest) EnhancePromptResponse {
+	// 获取策略生成AI配置（优先使用 StrategyAIID，否则使用默认）
+	config := a.configService.GetConfig()
+	var aiConfig *models.AIConfig
+	targetAIID := config.StrategyAIID
+	if targetAIID == "" {
+		targetAIID = config.DefaultAIID
+	}
+	for i := range config.AIConfigs {
+		if config.AIConfigs[i].ID == targetAIID {
+			aiConfig = &config.AIConfigs[i]
+			break
+		}
+	}
+	if aiConfig == nil && len(config.AIConfigs) > 0 {
+		aiConfig = &config.AIConfigs[0]
+	}
+	if aiConfig == nil {
+		return EnhancePromptResponse{Success: false, Error: "未配置AI服务"}
+	}
+
+	// 创建LLM
+	ctx := context.Background()
+	factory := adk.NewModelFactory()
+	llm, err := factory.CreateModel(ctx, aiConfig)
+	if err != nil {
+		return EnhancePromptResponse{Success: false, Error: err.Error()}
+	}
+
+	// 设置LLM并增强提示词
+	a.strategyService.SetLLM(llm)
+	input := services.EnhancePromptInput{
+		OriginalPrompt: req.OriginalPrompt,
+		AgentRole:      req.AgentRole,
+		AgentName:      req.AgentName,
+	}
+	result, err := a.strategyService.EnhancePrompt(ctx, input)
+	if err != nil {
+		return EnhancePromptResponse{Success: false, Error: err.Error()}
+	}
+
+	return EnhancePromptResponse{
+		Success:        true,
+		EnhancedPrompt: result.EnhancedPrompt,
+	}
 }
 
 // ========== Meeting Room API ==========
@@ -467,6 +653,23 @@ type MeetingMessageRequest struct {
 	ReplyContent string   `json:"replyContent"`
 }
 
+// cancelMeetingInternal 内部取消会议方法
+func (a *App) cancelMeetingInternal(stockCode string) {
+	a.meetingCancelsMu.Lock()
+	if cancel, ok := a.meetingCancels[stockCode]; ok {
+		cancel()
+		delete(a.meetingCancels, stockCode)
+	}
+	a.meetingCancelsMu.Unlock()
+}
+
+// CancelMeeting 取消指定股票的会议（前端调用）
+func (a *App) CancelMeeting(stockCode string) bool {
+	a.cancelMeetingInternal(stockCode)
+	log.Info("会议已取消: %s", stockCode)
+	return true
+}
+
 // SendMeetingMessage 发送会议室消息（@指定成员回复）
 func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage {
 	// 获取Session
@@ -475,6 +678,22 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 		log.Warn("session not found: %s", req.StockCode)
 		return []models.ChatMessage{}
 	}
+
+	// 取消之前该股票的会议（如果有）
+	a.cancelMeetingInternal(req.StockCode)
+
+	// 创建可取消的 context
+	meetingCtx, cancel := context.WithCancel(a.ctx)
+	a.meetingCancelsMu.Lock()
+	a.meetingCancels[req.StockCode] = cancel
+	a.meetingCancelsMu.Unlock()
+
+	// 会议结束后清理
+	defer func() {
+		a.meetingCancelsMu.Lock()
+		delete(a.meetingCancels, req.StockCode)
+		a.meetingCancelsMu.Unlock()
+	}()
 
 	// 先保存用户消息
 	userMsg := models.ChatMessage{
@@ -506,16 +725,16 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 
 	// 判断是否为智能模式（无 @ 任何人）
 	if len(req.MentionIds) == 0 {
-		return a.runSmartMeeting(req.StockCode, stock, req.Content, aiConfig, position)
+		return a.runSmartMeeting(meetingCtx, req.StockCode, stock, req.Content, aiConfig, position)
 	}
 
 	// 原有逻辑：@ 指定专家
-	return a.runDirectMeeting(req, stock, aiConfig, position)
+	return a.runDirectMeeting(meetingCtx, req, stock, aiConfig, position)
 }
 
 // runSmartMeeting 智能会议模式
-func (a *App) runSmartMeeting(stockCode string, stock models.Stock, query string, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
-	allAgents := a.agentConfigService.GetAllAgents()
+func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock models.Stock, query string, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
+	allAgents := a.strategyService.GetEnabledAgents()
 	chatReq := meeting.ChatRequest{
 		Stock:     stock,
 		Query:     query,
@@ -542,7 +761,7 @@ func (a *App) runSmartMeeting(stockCode string, stock models.Stock, query string
 		runtime.EventsEmit(a.ctx, "meeting:progress:"+stockCode, event)
 	}
 
-	responses, err := a.meetingService.RunSmartMeetingWithCallback(a.ctx, aiConfig, chatReq, respCallback, progressCallback)
+	responses, err := a.meetingService.RunSmartMeetingWithCallback(ctx, aiConfig, chatReq, respCallback, progressCallback)
 	if err != nil {
 		log.Error("runSmartMeeting error: %v", err)
 		return []models.ChatMessage{}
@@ -564,8 +783,8 @@ func (a *App) runSmartMeeting(stockCode string, stock models.Stock, query string
 }
 
 // runDirectMeeting 直接 @ 指定专家模式（带事件推送）
-func (a *App) runDirectMeeting(req MeetingMessageRequest, stock models.Stock, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
-	agentConfigs := a.agentConfigService.GetAgentsByIDs(req.MentionIds)
+func (a *App) runDirectMeeting(ctx context.Context, req MeetingMessageRequest, stock models.Stock, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
+	agentConfigs := a.strategyService.GetAgentsByIDs(req.MentionIds)
 	if len(agentConfigs) == 0 {
 		return []models.ChatMessage{}
 	}
@@ -578,7 +797,7 @@ func (a *App) runDirectMeeting(req MeetingMessageRequest, stock models.Stock, ai
 		Position:     position,
 	}
 
-	responses, err := a.meetingService.SendMessage(a.ctx, aiConfig, chatReq)
+	responses, err := a.meetingService.SendMessage(ctx, aiConfig, chatReq)
 	if err != nil {
 		log.Error("runDirectMeeting error: %v", err)
 		return []models.ChatMessage{}
@@ -705,6 +924,17 @@ func (a *App) TestMCPConnection(serverID string) *mcp.ServerStatus {
 	return a.mcpManager.TestConnection(serverID)
 }
 
+// TestAIConnection 测试 AI 配置连通性
+func (a *App) TestAIConnection(config models.AIConfig) string {
+	factory := adk.NewModelFactory()
+	if err := factory.TestConnection(context.Background(), &config); err != nil {
+		log.Error("AI 连接测试失败 [%s]: %v", config.Name, err)
+		return err.Error()
+	}
+	log.Info("AI 连接测试成功 [%s]", config.Name)
+	return "success"
+}
+
 // GetMCPServerTools 获取指定 MCP 服务器的工具列表
 func (a *App) GetMCPServerTools(serverID string) []mcp.ToolInfo {
 	tools, err := a.mcpManager.GetServerTools(serverID)
@@ -792,4 +1022,30 @@ func (a *App) GetCurrentVersion() string {
 		return "unknown"
 	}
 	return a.updateService.GetCurrentVersion()
+}
+
+// GetLongHuBangList 获取龙虎榜列表
+func (a *App) GetLongHuBangList(pageSize, pageNumber int, tradeDate string) *services.LongHuBangListResult {
+	if a.longHuBangService == nil {
+		return nil
+	}
+	result, err := a.longHuBangService.GetLongHuBangList(pageSize, pageNumber, tradeDate)
+	if err != nil {
+		log.Error("获取龙虎榜失败: %v", err)
+		return nil
+	}
+	return result
+}
+
+// GetLongHuBangDetail 获取龙虎榜营业部明细
+func (a *App) GetLongHuBangDetail(code, tradeDate string) []models.LongHuBangDetail {
+	if a.longHuBangService == nil {
+		return nil
+	}
+	details, err := a.longHuBangService.GetStockDetail(code, tradeDate)
+	if err != nil {
+		log.Error("获取龙虎榜明细失败: %v", err)
+		return nil
+	}
+	return details
 }

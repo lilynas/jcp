@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { StockList } from './components/StockList';
 import { StockChart } from './components/StockChart';
 import { OrderBook as OrderBookComponent } from './components/OrderBook';
@@ -6,15 +6,18 @@ import { AgentRoom } from './components/AgentRoom';
 import { SettingsDialog } from './components/SettingsDialog';
 import { PositionDialog } from './components/PositionDialog';
 import { HotTrendDialog } from './components/HotTrendDialog';
+import { LongHuBangDialog } from './components/LongHuBangDialog';
 import { WelcomePage } from './components/WelcomePage';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
+import { ResizeHandle } from './components/ResizeHandle';
 import { getWatchlist, addToWatchlist, removeFromWatchlist } from './services/watchlistService';
 import { getKLineData, getOrderBook } from './services/stockService';
 import { getOrCreateSession, StockSession, updateStockPosition } from './services/sessionService';
+import { getConfig, updateConfig } from './services/configService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { isWailsEnv, httpRequest } from './services/apiAdapter';
 import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex, MarketStatus } from './types';
-import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp } from 'lucide-react';
+import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3 } from 'lucide-react';
 import logo from './assets/images/logo.png';
 
 // Wails API 动态导入
@@ -65,6 +68,21 @@ const windowIsMaximised = async (): Promise<boolean> => {
   return false;
 };
 
+const windowSetSize = async (width: number, height: number) => {
+  if (isWailsEnv()) {
+    const runtime = await getWailsRuntime();
+    runtime?.WindowSetSize(width, height);
+  }
+};
+
+const windowGetSize = async (): Promise<{ w: number; h: number }> => {
+  if (isWailsEnv()) {
+    const runtime = await getWailsRuntime();
+    return runtime?.WindowGetSize() ?? { w: 0, h: 0 };
+  }
+  return { w: window.innerWidth, h: window.innerHeight };
+};
+
 // 快讯服务
 const getTelegraphList = async (): Promise<Telegraph[]> => {
   if (isWailsEnv()) {
@@ -84,6 +102,23 @@ const openURL = async (url: string) => {
   }
 };
 
+// 布局配置常量
+const LAYOUT_DEFAULTS = {
+  leftPanelWidth: 280,
+  rightPanelWidth: 384,
+  bottomPanelHeight: 256,
+};
+const LAYOUT_MIN = {
+  leftPanelWidth: 280,
+  rightPanelWidth: 384,
+  bottomPanelHeight: 256,
+};
+const LAYOUT_MAX = {
+  leftPanelWidth: 500,
+  rightPanelWidth: 700,
+  bottomPanelHeight: 450,
+};
+
 const App: React.FC = () => {
   const [watchlist, setWatchlist] = useState<Stock[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
@@ -99,9 +134,16 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showPosition, setShowPosition] = useState(false);
   const [showHotTrend, setShowHotTrend] = useState(false);
+  const [showLongHuBang, setShowLongHuBang] = useState(false);
   const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
   const [isMaximized, setIsMaximized] = useState(false);
+
+  // 布局状态
+  const [leftPanelWidth, setLeftPanelWidth] = useState(LAYOUT_DEFAULTS.leftPanelWidth);
+  const [rightPanelWidth, setRightPanelWidth] = useState(LAYOUT_DEFAULTS.rightPanelWidth);
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(LAYOUT_DEFAULTS.bottomPanelHeight);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selectedStock = useMemo(() =>
     watchlist.find(s => s.symbol === selectedSymbol) || watchlist[0]
@@ -144,6 +186,81 @@ const App: React.FC = () => {
       setMarketIndices(indices);
     }
   }, []);
+
+  // 保存布局配置（防抖）
+  const saveLayoutConfig = useCallback(async (
+    left: number, right: number, bottom: number,
+    winWidth?: number, winHeight?: number
+  ) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        const config = await getConfig();
+        const size = await windowGetSize();
+        config.layout = {
+          leftPanelWidth: left,
+          rightPanelWidth: right,
+          bottomPanelHeight: bottom,
+          windowWidth: winWidth ?? size.w,
+          windowHeight: winHeight ?? size.h,
+        };
+        await updateConfig(config);
+      } catch (err) {
+        console.error('Failed to save layout config:', err);
+      }
+    }, 500);
+  }, []);
+
+  // 左侧面板 resize
+  const handleLeftResize = useCallback((delta: number) => {
+    setLeftPanelWidth(prev => {
+      const newWidth = Math.max(LAYOUT_MIN.leftPanelWidth, Math.min(LAYOUT_MAX.leftPanelWidth, prev + delta));
+      return newWidth;
+    });
+  }, []);
+
+  // 右侧面板 resize
+  const handleRightResize = useCallback((delta: number) => {
+    setRightPanelWidth(prev => {
+      const newWidth = Math.max(LAYOUT_MIN.rightPanelWidth, Math.min(LAYOUT_MAX.rightPanelWidth, prev - delta));
+      return newWidth;
+    });
+  }, []);
+
+  // 底部面板 resize
+  const handleBottomResize = useCallback((delta: number) => {
+    setBottomPanelHeight(prev => {
+      const newHeight = Math.max(LAYOUT_MIN.bottomPanelHeight, Math.min(LAYOUT_MAX.bottomPanelHeight, prev - delta));
+      return newHeight;
+    });
+  }, []);
+
+  // resize 结束时保存配置
+  const handleResizeEnd = useCallback(() => {
+    saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight);
+  }, [leftPanelWidth, rightPanelWidth, bottomPanelHeight, saveLayoutConfig]);
+
+  // 监听窗口 resize 事件
+  useEffect(() => {
+    const windowResizeTimeoutRef = { current: null as ReturnType<typeof setTimeout> | null };
+    const handleWindowResize = () => {
+      if (windowResizeTimeoutRef.current) {
+        clearTimeout(windowResizeTimeoutRef.current);
+      }
+      windowResizeTimeoutRef.current = setTimeout(() => {
+        saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight);
+      }, 500);
+    };
+    window.addEventListener('resize', handleWindowResize);
+    return () => {
+      window.removeEventListener('resize', handleWindowResize);
+      if (windowResizeTimeoutRef.current) {
+        clearTimeout(windowResizeTimeoutRef.current);
+      }
+    };
+  }, [leftPanelWidth, rightPanelWidth, bottomPanelHeight, saveLayoutConfig]);
 
   // 获取快讯列表
   const handleShowTelegraphList = async () => {
@@ -240,6 +357,18 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadWatchlist = async () => {
       try {
+        // 加载布局配置
+        const config = await getConfig();
+        if (config.layout) {
+          if (config.layout.leftPanelWidth > 0) setLeftPanelWidth(config.layout.leftPanelWidth);
+          if (config.layout.rightPanelWidth > 0) setRightPanelWidth(config.layout.rightPanelWidth);
+          if (config.layout.bottomPanelHeight > 0) setBottomPanelHeight(config.layout.bottomPanelHeight);
+          // 恢复窗口大小
+          if (config.layout.windowWidth > 0 && config.layout.windowHeight > 0) {
+            windowSetSize(config.layout.windowWidth, config.layout.windowHeight);
+          }
+        }
+
         const list = await getWatchlist();
         setWatchlist(list);
         if (list.length > 0) {
@@ -251,6 +380,12 @@ const App: React.FC = () => {
           // 加载第一个股票的Session
           const session = await getOrCreateSession(list[0].symbol, list[0].name);
           setCurrentSession(session);
+        }
+        // 主动获取一次快讯数据（解决启动时后端推送早于前端监听注册的时序问题）
+        const telegraphs = await getTelegraphList();
+        if (telegraphs && telegraphs.length > 0) {
+          const latest = telegraphs[0];
+          setMarketMessage(`[${latest.time}] ${latest.content}`);
         }
       } catch (err) {
         console.error('Failed to load watchlist:', err);
@@ -264,6 +399,8 @@ const App: React.FC = () => {
   // Load K-line data when symbol or period changes
   useEffect(() => {
     if (!selectedSymbol) return;
+    // 切换时先清空数据，避免闪烁
+    setKLineData([]);
     const loadKLineData = async () => {
       // 分时图需要更多数据点（1分钟K线，一天约240根）
       const dataLen = timePeriod === '1m' ? 250 : 60;
@@ -342,6 +479,13 @@ const App: React.FC = () => {
 
         <div className="flex items-center gap-3" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
           <button
+            onClick={() => setShowLongHuBang(true)}
+            className="p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-red-400/40 transition-colors"
+            title="龙虎榜"
+          >
+            <BarChart3 className="h-4 w-4" />
+          </button>
+          <button
             onClick={() => setShowHotTrend(true)}
             className="p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-orange-400/40 transition-colors"
             title="全网热点"
@@ -398,14 +542,19 @@ const App: React.FC = () => {
       {/* Main Content Grid */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar: Watchlist */}
-        <StockList
-          stocks={watchlist}
-          selectedSymbol={selectedSymbol}
-          onSelect={handleSelectStock}
-          onAddStock={handleAddStock}
-          onRemoveStock={handleRemoveStock}
-          marketIndices={marketIndices}
-        />
+        <div style={{ width: leftPanelWidth }} className="shrink-0">
+          <StockList
+            stocks={watchlist}
+            selectedSymbol={selectedSymbol}
+            onSelect={handleSelectStock}
+            onAddStock={handleAddStock}
+            onRemoveStock={handleRemoveStock}
+            marketIndices={marketIndices}
+          />
+        </div>
+
+        {/* Left Resize Handle */}
+        <ResizeHandle direction="horizontal" onResize={handleLeftResize} onResizeEnd={handleResizeEnd} />
 
         {/* Center Panel: Charts & Data */}
         <div className="flex-1 flex flex-col min-w-0 bg-transparent">
@@ -480,9 +629,12 @@ const App: React.FC = () => {
                   stock={selectedStock}
                />
             </div>
-            
+
+            {/* Bottom Resize Handle */}
+            <ResizeHandle direction="vertical" onResize={handleBottomResize} onResizeEnd={handleResizeEnd} />
+
             {/* Bottom Info Panel: Order Book Only */}
-            <div className="h-64 border-t fin-divider flex fin-panel shrink-0">
+            <div style={{ height: bottomPanelHeight }} className="border-t fin-divider flex fin-panel shrink-0">
                <div className="flex-1 overflow-hidden relative">
                   <OrderBookComponent data={orderBook} />
                </div>
@@ -490,13 +642,18 @@ const App: React.FC = () => {
           </div>
         </div>
 
+        {/* Right Resize Handle */}
+        <ResizeHandle direction="horizontal" onResize={handleRightResize} onResizeEnd={handleResizeEnd} />
+
         {/* Right Panel: AI Agents */}
-        <AgentRoom
-          stock={selectedStock}
-          kLineData={kLineData}
-          session={currentSession}
-          onSessionUpdate={setCurrentSession}
-        />
+        <div style={{ width: rightPanelWidth }} className="shrink-0">
+          <AgentRoom
+            stock={selectedStock}
+            kLineData={kLineData}
+            session={currentSession}
+            onSessionUpdate={setCurrentSession}
+          />
+        </div>
       </div>
 
       <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
@@ -514,6 +671,7 @@ const App: React.FC = () => {
         }}
       />
       <HotTrendDialog isOpen={showHotTrend} onClose={() => setShowHotTrend(false)} />
+      <LongHuBangDialog isOpen={showLongHuBang} onClose={() => setShowLongHuBang(false)} />
     </div>
   );
 };

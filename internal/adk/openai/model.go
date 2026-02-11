@@ -18,16 +18,18 @@ var (
 
 // OpenAIModel 实现 model.LLM 接口，支持 thinking 模型
 type OpenAIModel struct {
-	Client    *openai.Client
-	ModelName string
+	Client     *openai.Client
+	ModelName  string
+	SendParams bool // 是否发送 temperature/top_p/max_tokens 等高级参数
 }
 
 // NewOpenAIModel 创建 OpenAI 模型
-func NewOpenAIModel(modelName string, cfg openai.ClientConfig) *OpenAIModel {
+func NewOpenAIModel(modelName string, cfg openai.ClientConfig, sendParams bool) *OpenAIModel {
 	client := openai.NewClientWithConfig(cfg)
 	return &OpenAIModel{
-		Client:    client,
-		ModelName: modelName,
+		Client:     client,
+		ModelName:  modelName,
+		SendParams: sendParams,
 	}
 }
 
@@ -47,7 +49,7 @@ func (o *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 // generate 非流式生成
 func (o *OpenAIModel) generate(ctx context.Context, req *model.LLMRequest) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		openaiReq, err := toOpenAIChatCompletionRequest(req, o.ModelName)
+		openaiReq, err := toOpenAIChatCompletionRequest(req, o.ModelName, o.SendParams)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -72,7 +74,7 @@ func (o *OpenAIModel) generate(ctx context.Context, req *model.LLMRequest) iter.
 // generateStream 流式生成
 func (o *OpenAIModel) generateStream(ctx context.Context, req *model.LLMRequest) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		openaiReq, err := toOpenAIChatCompletionRequest(req, o.ModelName)
+		openaiReq, err := toOpenAIChatCompletionRequest(req, o.ModelName, o.SendParams)
 		if err != nil {
 			yield(nil, err)
 			return
