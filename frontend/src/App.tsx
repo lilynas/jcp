@@ -170,7 +170,7 @@ const App: React.FC = () => {
   };
 
   // 使用市场事件 Hook
-  const { subscribeOrderBook } = useMarketEvents({
+  const { subscribe, subscribeOrderBook } = useMarketEvents({
     onStockUpdate: handleStockUpdate,
     onOrderBookUpdate: handleOrderBookUpdate,
     onTelegraphUpdate: handleTelegraphUpdate,
@@ -182,7 +182,12 @@ const App: React.FC = () => {
   const handleAddStock = async (newStock: Stock) => {
     if (!watchlist.find(s => s.symbol === newStock.symbol)) {
       await addToWatchlist(newStock);
-      setWatchlist(prev => [...prev, newStock]);
+      setWatchlist(prev => {
+        const updated = [...prev, newStock];
+        // 更新订阅列表
+        subscribe(updated.map(s => s.symbol));
+        return updated;
+      });
       // 添加后自动选中新股票并加载数据
       setSelectedSymbol(newStock.symbol);
       subscribeOrderBook(newStock.symbol);
@@ -199,7 +204,12 @@ const App: React.FC = () => {
   // Handle Removing Stock
   const handleRemoveStock = async (symbol: string) => {
     await removeFromWatchlist(symbol);
-    setWatchlist(prev => prev.filter(s => s.symbol !== symbol));
+    setWatchlist(prev => {
+      const updated = prev.filter(s => s.symbol !== symbol);
+      // 更新订阅列表
+      subscribe(updated.map(s => s.symbol));
+      return updated;
+    });
     // 如果删除的是当前选中的股票，切换到第一个
     if (symbol === selectedSymbol) {
       const remaining = watchlist.filter(s => s.symbol !== symbol);
@@ -234,6 +244,8 @@ const App: React.FC = () => {
         setWatchlist(list);
         if (list.length > 0) {
           setSelectedSymbol(list[0].symbol);
+          // 订阅所有股票的实时数据推送
+          subscribe(list.map(s => s.symbol));
           // 订阅第一个股票的盘口推送
           subscribeOrderBook(list[0].symbol);
           // 加载第一个股票的Session
@@ -247,7 +259,7 @@ const App: React.FC = () => {
       }
     };
     loadWatchlist();
-  }, [subscribeOrderBook]);
+  }, [subscribe, subscribeOrderBook]);
 
   // Load K-line data when symbol or period changes
   useEffect(() => {

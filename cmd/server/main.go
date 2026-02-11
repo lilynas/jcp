@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -294,9 +295,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stock/kline", s.authMiddleware(s.handleKLine))
 	mux.HandleFunc("/api/stock/orderbook", s.authMiddleware(s.handleOrderBook))
 	mux.HandleFunc("/api/stock/search", s.authMiddleware(s.handleSearchStocks))
+	mux.HandleFunc("/api/stock/position", s.authMiddleware(s.handleStockPosition))
+	mux.HandleFunc("/api/market/status", s.authMiddleware(s.handleMarketStatus))
+	mux.HandleFunc("/api/market/indices", s.authMiddleware(s.handleMarketIndices))
 	mux.HandleFunc("/api/agents", s.authMiddleware(s.handleAgents))
 	mux.HandleFunc("/api/session", s.authMiddleware(s.handleSession))
 	mux.HandleFunc("/api/session/messages", s.authMiddleware(s.handleSessionMessages))
+	mux.HandleFunc("/api/meeting/send", s.authMiddleware(s.handleMeetingSend))
 	mux.HandleFunc("/api/news/telegraph", s.authMiddleware(s.handleTelegraph))
 	mux.HandleFunc("/api/hottrend", s.authMiddleware(s.handleHotTrend))
 	mux.HandleFunc("/api/hottrend/platforms", s.authMiddleware(s.handleHotTrendPlatforms))
@@ -734,6 +739,234 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, s.mcpManager.GetAllStatus())
+}
+
+// ========== Market Data API ==========
+
+func (s *Server) handleMarketStatus(w http.ResponseWriter, r *http.Request) {
+	status := s.marketService.GetMarketStatus()
+	respondJSON(w, status)
+}
+
+func (s *Server) handleMarketIndices(w http.ResponseWriter, r *http.Request) {
+	indices, err := s.marketService.GetMarketIndices()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, indices)
+}
+
+// ========== Stock Position API ==========
+
+func (s *Server) handleStockPosition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		StockCode string  `json:"stockCode"`
+		Shares    int64   `json:"shares"`
+		CostPrice float64 `json:"costPrice"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.StockCode == "" {
+		respondError(w, http.StatusBadRequest, "stockCode required")
+		return
+	}
+	if err := s.sessionService.UpdatePosition(req.StockCode, req.Shares, req.CostPrice); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, map[string]string{"status": "success"})
+}
+
+// ========== Meeting API (SSE) ==========
+
+// MeetingMessageRequest 会议室消息请求
+type MeetingMessageRequest struct {
+	StockCode    string   `json:"stockCode"`
+	Content      string   `json:"content"`
+	MentionIds   []string `json:"mentionIds"`
+	ReplyToId    string   `json:"replyToId"`
+	ReplyContent string   `json:"replyContent"`
+}
+
+func (s *Server) handleMeetingSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req MeetingMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.StockCode == "" || req.Content == "" {
+		respondError(w, http.StatusBadRequest, "stockCode and content required")
+		return
+	}
+
+	// 设置 SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	// 获取Session
+	session := s.sessionService.GetSession(req.StockCode)
+	if session == nil {
+		// 尝试创建
+		var err error
+		session, err = s.sessionService.GetOrCreateSession(req.StockCode, "")
+		if err != nil {
+			sendSSEError(w, flusher, "session error: "+err.Error())
+			return
+		}
+	}
+
+	// 保存用户消息
+	userMsg := models.ChatMessage{
+		AgentID:   "user",
+		AgentName: "老韭菜",
+		Content:   req.Content,
+		ReplyTo:   req.ReplyToId,
+		Mentions:  req.MentionIds,
+	}
+	s.sessionService.AddMessage(req.StockCode, userMsg)
+
+	// 获取股票数据
+	stocks, _ := s.marketService.GetStockRealTimeData(req.StockCode)
+	var stock models.Stock
+	if len(stocks) > 0 {
+		stock = stocks[0]
+	}
+
+	// 获取默认AI配置
+	config := s.configService.GetConfig()
+	aiConfig := s.getDefaultAIConfig(config)
+	if aiConfig == nil {
+		sendSSEError(w, flusher, "未配置 AI 服务，请先在设置中配置")
+		return
+	}
+
+	// 获取持仓信息
+	position := s.sessionService.GetPosition(req.StockCode)
+
+	ctx := r.Context()
+
+	// 响应回调: 每次发言完成后通过 SSE 推送
+	respCallback := func(resp meeting.ChatResponse) {
+		msg := models.ChatMessage{
+			AgentID:   resp.AgentID,
+			AgentName: resp.AgentName,
+			Role:      resp.Role,
+			Content:   resp.Content,
+			Round:     resp.Round,
+			MsgType:   resp.MsgType,
+		}
+		s.sessionService.AddMessage(req.StockCode, msg)
+		sendSSEEvent(w, flusher, "message", msg)
+	}
+
+	// 进度回调: 工具调用等细粒度事件
+	progressCallback := func(event meeting.ProgressEvent) {
+		sendSSEEvent(w, flusher, "progress", event)
+	}
+
+	// 判断模式并执行
+	if len(req.MentionIds) == 0 {
+		// 智能模式
+		allAgents := s.agentConfigService.GetAllAgents()
+		chatReq := meeting.ChatRequest{
+			Stock:     stock,
+			Query:     req.Content,
+			AllAgents: allAgents,
+			Position:  position,
+		}
+		_, err := s.meetingService.RunSmartMeetingWithCallback(ctx, aiConfig, chatReq, respCallback, progressCallback)
+		if err != nil {
+			sendSSEError(w, flusher, err.Error())
+			return
+		}
+	} else {
+		// 直接 @ 指定专家模式
+		agentConfigs := s.agentConfigService.GetAgentsByIDs(req.MentionIds)
+		if len(agentConfigs) == 0 {
+			sendSSEError(w, flusher, "未找到指定的专家")
+			return
+		}
+		chatReq := meeting.ChatRequest{
+			Stock:        stock,
+			Agents:       agentConfigs,
+			Query:        req.Content,
+			ReplyContent: req.ReplyContent,
+			Position:     position,
+		}
+		responses, err := s.meetingService.SendMessage(ctx, aiConfig, chatReq)
+		if err != nil {
+			sendSSEError(w, flusher, err.Error())
+			return
+		}
+		// 保存并推送响应
+		for _, resp := range responses {
+			msg := models.ChatMessage{
+				AgentID:   resp.AgentID,
+				AgentName: resp.AgentName,
+				Role:      resp.Role,
+				Content:   resp.Content,
+				Round:     resp.Round,
+				MsgType:   resp.MsgType,
+			}
+			s.sessionService.AddMessage(req.StockCode, msg)
+			sendSSEEvent(w, flusher, "message", msg)
+		}
+	}
+
+	// 发送完成事件
+	sendSSEEvent(w, flusher, "done", map[string]string{"status": "complete"})
+}
+
+// getDefaultAIConfig 获取默认AI配置
+func (s *Server) getDefaultAIConfig(config *models.AppConfig) *models.AIConfig {
+	for i := range config.AIConfigs {
+		if config.AIConfigs[i].ID == config.DefaultAIID {
+			return &config.AIConfigs[i]
+		}
+		if config.AIConfigs[i].IsDefault {
+			return &config.AIConfigs[i]
+		}
+	}
+	if len(config.AIConfigs) > 0 {
+		return &config.AIConfigs[0]
+	}
+	return nil
+}
+
+// sendSSEEvent 发送 SSE 事件
+func sendSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string, data interface{}) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(jsonData))
+	flusher.Flush()
+}
+
+// sendSSEError 发送 SSE 错误事件
+func sendSSEError(w http.ResponseWriter, flusher http.Flusher, message string) {
+	sendSSEEvent(w, flusher, "error", map[string]string{"error": message})
 }
 
 // ========== Helper functions ==========

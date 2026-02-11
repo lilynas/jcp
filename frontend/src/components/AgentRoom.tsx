@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Stock, KLineData } from '../types';
 import { getAgentConfigs, AgentConfig } from '../services/agentConfigService';
-import { StockSession, ChatMessage, sendMeetingMessage, MeetingMessageRequest, getSessionMessages } from '../services/sessionService';
+import { StockSession, ChatMessage, sendMeetingMessage, MeetingMessageRequest, getSessionMessages, MeetingSSECallbacks } from '../services/sessionService';
 import { MessageSquare, Loader2, Send, User, Users, X, Reply, Trash2, Wrench, CheckCircle2, AlertCircle, Copy, Check, RotateCcw, Pencil } from 'lucide-react';
 import { clearSessionMessages } from '../services/sessionService';
 import { NodeRenderer } from 'markstream-react';
@@ -261,12 +261,57 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
         replyContent: replyTo?.content || ''
       };
 
-      // 统一模式：无论智能模式还是直接@模式，消息都通过事件实时推送
-      await sendMeetingMessage(req);
-      // 消息已通过事件实时添加，更新session
+      // Web 模式: 通过 SSE 回调接收实时消息
+      // Wails 模式: 通过 Wails 事件接收实时消息
+      const sseCallbacks: MeetingSSECallbacks | undefined = !isWailsEnv() ? {
+        onMessage: (msg: ChatMessage) => {
+          if (meetingCancelledRef.current[stockCode]) return;
+          if (currentStockCodeRef.current === stockCode) {
+            setMessages(prev => [...prev, msg]);
+          }
+        },
+        onProgress: (event: any) => {
+          if (meetingCancelledRef.current[stockCode]) return;
+          if (currentStockCodeRef.current !== stockCode) return;
+          setProgress(prev => {
+            switch (event.type) {
+              case 'agent_start':
+                return {
+                  currentAgent: event.agentId,
+                  currentAgentName: event.agentName,
+                  steps: [],
+                  streamingText: '',
+                };
+              case 'agent_done':
+                return { ...prev, currentAgent: null, currentAgentName: null, steps: [], streamingText: '' };
+              case 'tool_call':
+                return {
+                  ...prev,
+                  steps: [...prev.steps, { type: 'tool_call', detail: event.detail || '', done: false }],
+                };
+              case 'tool_result': {
+                const updatedSteps = prev.steps.map(s =>
+                  s.type === 'tool_call' && s.detail === event.detail ? { ...s, done: true } : s
+                );
+                return { ...prev, steps: updatedSteps };
+              }
+              case 'streaming':
+                return { ...prev, streamingText: prev.streamingText + (event.content || '') };
+              default:
+                return prev;
+            }
+          });
+        },
+        onError: (error: string) => {
+          showToast(error, 'error');
+        },
+      } : undefined;
+
+      await sendMeetingMessage(req, sseCallbacks);
+      // 消息已通过事件/SSE实时添加，更新session
       onSessionUpdate({
         ...session,
-        messages: [] // 会在事件中更新
+        messages: [] // 会在事件/SSE中更新
       });
     } catch (e) {
       console.error('[AgentRoom] sendMeetingMessage error:', e);
@@ -275,10 +320,12 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
       if (e instanceof Error) {
         if (e.message.includes('timeout') || e.message.includes('超时')) {
           errorMsg = '会议响应超时，请稍后重试';
-        } else if (e.message.includes('AI') || e.message.includes('config')) {
+        } else if (e.message.includes('AI') || e.message.includes('config') || e.message.includes('未配置')) {
           errorMsg = '未配置 AI 服务，请先在设置中配置';
-        } else if (e.message.includes('network') || e.message.includes('fetch')) {
+        } else if (e.message.includes('network') || e.message.includes('fetch') || e.message.includes('Failed to fetch')) {
           errorMsg = '网络连接失败，请检查网络';
+        } else if (e.message !== 'Request failed') {
+          errorMsg = e.message;
         }
       }
       showToast(errorMsg, 'error');

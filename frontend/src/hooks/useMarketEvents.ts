@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { isWailsEnv } from '../services/apiAdapter';
+import { isWailsEnv, httpRequest } from '../services/apiAdapter';
 import { Stock, OrderBook, Telegraph, MarketIndex, MarketStatus } from '../types';
+import { getStockRealTimeData, getOrderBook } from '../services/stockService';
 
 // 事件名称常量，与后端保持一致
 const EVENT_STOCK_UPDATE = 'market:stock:update';
@@ -30,8 +31,8 @@ const getWailsRuntime = async () => {
 
 /**
  * 市场数据事件 Hook
- * 监听后端推送的实时市场数据
- * 注意：Web 模式下事件推送不可用，需要轮询实现
+ * Wails 模式: 监听后端推送的实时市场数据
+ * Web 模式: 轮询 HTTP API 获取数据
  */
 export function useMarketEvents(options: UseMarketEventsOptions) {
   const { onStockUpdate, onOrderBookUpdate, onTelegraphUpdate, onMarketStatusUpdate, onMarketIndicesUpdate } = options;
@@ -43,6 +44,11 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
   const marketStatusCallbackRef = useRef(onMarketStatusUpdate);
   const marketIndicesCallbackRef = useRef(onMarketIndicesUpdate);
 
+  // Web 模式下的订阅状态
+  const webSubscribedCodesRef = useRef<string[]>([]);
+  const webOrderBookCodeRef = useRef<string>('');
+  const lastTelegraphContentRef = useRef<string>('');
+
   // 更新 ref
   useEffect(() => {
     stockCallbackRef.current = onStockUpdate;
@@ -52,40 +58,31 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
     marketIndicesCallbackRef.current = onMarketIndicesUpdate;
   }, [onStockUpdate, onOrderBookUpdate, onTelegraphUpdate, onMarketStatusUpdate, onMarketIndicesUpdate]);
 
-  // 注册事件监听 (仅 Wails 模式)
+  // ========== Wails 模式: 事件监听 ==========
   useEffect(() => {
-    // Web 模式下跳过事件注册
-    if (!isWailsEnv()) {
-      console.log('Web mode: Wails events not available, real-time updates disabled');
-      return;
-    }
+    if (!isWailsEnv()) return;
 
     let cleanup: (() => void) | undefined;
 
     (async () => {
       const runtime = await getWailsRuntime();
       
-      // 监听股票数据更新
       runtime.EventsOn(EVENT_STOCK_UPDATE, (stocks: Stock[]) => {
         stockCallbackRef.current?.(stocks);
       });
 
-      // 监听盘口数据更新
       runtime.EventsOn(EVENT_ORDERBOOK_UPDATE, (orderBook: OrderBook) => {
         orderBookCallbackRef.current?.(orderBook);
       });
 
-      // 监听快讯数据更新
       runtime.EventsOn(EVENT_TELEGRAPH_UPDATE, (telegraph: Telegraph) => {
         telegraphCallbackRef.current?.(telegraph);
       });
 
-      // 监听市场状态更新
       runtime.EventsOn(EVENT_MARKET_STATUS_UPDATE, (status: MarketStatus) => {
         marketStatusCallbackRef.current?.(status);
       });
 
-      // 监听大盘指数更新
       runtime.EventsOn(EVENT_MARKET_INDICES_UPDATE, (indices: MarketIndex[]) => {
         marketIndicesCallbackRef.current?.(indices);
       });
@@ -99,26 +96,143 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
       };
     })();
 
-    // 清理函数
     return () => {
       cleanup?.();
     };
   }, []);
 
-  // 订阅股票
+  // ========== Web 模式: 轮询 ==========
+  useEffect(() => {
+    if (isWailsEnv()) return;
+
+    console.log('Web mode: Starting polling for market data');
+
+    // 股票数据轮询 (3s)
+    const stockTimer = setInterval(async () => {
+      const codes = webSubscribedCodesRef.current;
+      if (codes.length === 0) return;
+      try {
+        const stocks = await getStockRealTimeData(codes);
+        stockCallbackRef.current?.(stocks);
+      } catch (e) {
+        // 静默失败，下次重试
+      }
+    }, 3000);
+
+    // 盘口数据轮询 (1s)
+    const orderBookTimer = setInterval(async () => {
+      const code = webOrderBookCodeRef.current;
+      if (!code) return;
+      try {
+        const ob = await getOrderBook(code);
+        orderBookCallbackRef.current?.(ob);
+      } catch (e) {
+        // 静默失败
+      }
+    }, 1000);
+
+    // 快讯轮询 (30s)
+    const telegraphTimer = setInterval(async () => {
+      try {
+        const telegraphs = await httpRequest<Telegraph[]>('/api/news/telegraph');
+        if (telegraphs && telegraphs.length > 0) {
+          const latest = telegraphs[0];
+          if (latest.content !== lastTelegraphContentRef.current) {
+            lastTelegraphContentRef.current = latest.content;
+            telegraphCallbackRef.current?.(latest);
+          }
+        }
+      } catch (e) {
+        // 静默失败
+      }
+    }, 30000);
+
+    // 市场状态轮询 (5s)
+    const marketStatusTimer = setInterval(async () => {
+      try {
+        const status = await httpRequest<MarketStatus>('/api/market/status');
+        marketStatusCallbackRef.current?.(status);
+      } catch (e) {
+        // 静默失败
+      }
+    }, 5000);
+
+    // 大盘指数轮询 (3s)
+    const marketIndicesTimer = setInterval(async () => {
+      try {
+        const indices = await httpRequest<MarketIndex[]>('/api/market/indices');
+        marketIndicesCallbackRef.current?.(indices);
+      } catch (e) {
+        // 静默失败
+      }
+    }, 3000);
+
+    // 立即执行一次
+    (async () => {
+      try {
+        const status = await httpRequest<MarketStatus>('/api/market/status');
+        marketStatusCallbackRef.current?.(status);
+      } catch (e) { /* ignore */ }
+
+      try {
+        const indices = await httpRequest<MarketIndex[]>('/api/market/indices');
+        marketIndicesCallbackRef.current?.(indices);
+      } catch (e) { /* ignore */ }
+
+      try {
+        const telegraphs = await httpRequest<Telegraph[]>('/api/news/telegraph');
+        if (telegraphs && telegraphs.length > 0) {
+          const latest = telegraphs[0];
+          lastTelegraphContentRef.current = latest.content;
+          telegraphCallbackRef.current?.(latest);
+        }
+      } catch (e) { /* ignore */ }
+
+      // 初始股票数据
+      const codes = webSubscribedCodesRef.current;
+      if (codes.length > 0) {
+        try {
+          const stocks = await getStockRealTimeData(codes);
+          stockCallbackRef.current?.(stocks);
+        } catch (e) { /* ignore */ }
+      }
+    })();
+
+    return () => {
+      clearInterval(stockTimer);
+      clearInterval(orderBookTimer);
+      clearInterval(telegraphTimer);
+      clearInterval(marketStatusTimer);
+      clearInterval(marketIndicesTimer);
+    };
+  }, []);
+
+  // 订阅股票 (Web 模式下立即拉取一次)
   const subscribe = useCallback((codes: string[]) => {
-    if (!isWailsEnv()) return;
-    getWailsRuntime().then(runtime => {
-      runtime.EventsEmit(EVENT_MARKET_SUBSCRIBE, codes);
-    });
+    if (isWailsEnv()) {
+      getWailsRuntime().then(runtime => {
+        runtime.EventsEmit(EVENT_MARKET_SUBSCRIBE, codes);
+      });
+    } else {
+      webSubscribedCodesRef.current = codes;
+      // 立即拉取一次数据
+      if (codes.length > 0) {
+        getStockRealTimeData(codes).then(stocks => {
+          stockCallbackRef.current?.(stocks);
+        }).catch(() => {});
+      }
+    }
   }, []);
 
   // 订阅盘口（指定当前选中的股票）
   const subscribeOrderBook = useCallback((code: string) => {
-    if (!isWailsEnv()) return;
-    getWailsRuntime().then(runtime => {
-      runtime.EventsEmit(EVENT_ORDERBOOK_SUBSCRIBE, code);
-    });
+    if (isWailsEnv()) {
+      getWailsRuntime().then(runtime => {
+        runtime.EventsEmit(EVENT_ORDERBOOK_SUBSCRIBE, code);
+      });
+    } else {
+      webOrderBookCodeRef.current = code;
+    }
   }, []);
 
   return { subscribe, subscribeOrderBook };
