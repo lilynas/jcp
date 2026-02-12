@@ -8,8 +8,11 @@ import { PositionDialog } from './components/PositionDialog';
 import { HotTrendDialog } from './components/HotTrendDialog';
 import { LongHuBangDialog } from './components/LongHuBangDialog';
 import { WelcomePage } from './components/WelcomePage';
-import { ThemeSwitcher } from './components/ThemeSwitcher';
+
 import { ResizeHandle } from './components/ResizeHandle';
+import { MobileNav } from './components/MobileNav';
+import { MobileChartPage } from './components/MobileChartPage';
+import { useResponsive } from './hooks/useResponsive';
 import { getWatchlist, addToWatchlist, removeFromWatchlist } from './services/watchlistService';
 import { getKLineData, getOrderBook } from './services/stockService';
 import { getOrCreateSession, StockSession, updateStockPosition } from './services/sessionService';
@@ -17,7 +20,7 @@ import { getConfig, updateConfig } from './services/configService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { isWailsEnv, httpRequest } from './services/apiAdapter';
 import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex, MarketStatus } from './types';
-import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3 } from 'lucide-react';
+import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Menu } from 'lucide-react';
 import logo from './assets/images/logo.png';
 
 // Wails API 动态导入
@@ -138,6 +141,10 @@ const App: React.FC = () => {
   const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
   const [isMaximized, setIsMaximized] = useState(false);
+
+  // 响应式状态
+  const { isMobile, activeTab, setActiveTab } = useResponsive();
+  const [showMobileWatchlist, setShowMobileWatchlist] = useState(false);
 
   // 布局状态
   const [leftPanelWidth, setLeftPanelWidth] = useState(LAYOUT_DEFAULTS.leftPanelWidth);
@@ -433,7 +440,8 @@ const App: React.FC = () => {
           <span className="font-bold text-lg tracking-tight">韭菜盘 <span className="text-accent-2">AI</span></span>
         </div>
         
-        <div className="flex items-center gap-4 fin-panel-soft px-4 py-1.5 rounded-full border fin-divider relative" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
+        {/* 桌面端：完整快讯显示 */}
+        <div className="hidden md:flex items-center gap-4 fin-panel-soft px-4 py-1.5 rounded-full border fin-divider relative" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
           <Radio className="h-3 w-3 animate-pulse text-accent-2" />
           <span className="text-xs font-mono text-slate-300 w-96 truncate text-center">
             实时快讯: {marketMessage}
@@ -477,28 +485,51 @@ const App: React.FC = () => {
           )}
         </div>
 
+        {/* 移动端：简化快讯显示 - 可点击展开 */}
+        <button 
+          className="flex md:hidden flex-1 mx-3 items-center gap-2 fin-panel-soft px-3 py-1.5 rounded-full border fin-divider overflow-hidden cursor-pointer active:scale-95 transition-transform" 
+          style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}
+          onClick={handleShowTelegraphList}
+        >
+          <Radio className="h-3 w-3 animate-pulse text-accent-2 shrink-0" />
+          <span className="text-xs font-mono text-slate-300 truncate flex-1 text-left">
+            {marketMessage}
+          </span>
+        </button>
+
         <div className="flex items-center gap-3" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
           <button
             onClick={() => setShowLongHuBang(true)}
-            className="p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-red-400/40 transition-colors"
+            className="hidden md:flex p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-red-400/40 transition-colors"
             title="龙虎榜"
           >
             <BarChart3 className="h-4 w-4" />
           </button>
           <button
             onClick={() => setShowHotTrend(true)}
-            className="p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-orange-400/40 transition-colors"
+            className="hidden md:flex p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-orange-400/40 transition-colors"
             title="全网热点"
           >
             <TrendingUp className="h-4 w-4" />
           </button>
-          <ThemeSwitcher />
+          {/* 桌面端：设置按钮 */}
           <button
             onClick={() => setShowSettings(true)}
-            className="p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-accent/40 transition-colors"
+            className="hidden md:flex p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-accent/40 transition-colors"
+            title="设置"
           >
             <Settings className="h-4 w-4" />
           </button>
+          
+          {/* 移动端：设置按钮 */}
+          <button
+            onClick={() => setShowSettings(true)}
+            className="flex md:hidden p-2 rounded-lg fin-panel border fin-divider text-slate-300 hover:text-white hover:border-accent/40 transition-colors"
+            title="设置"
+          >
+            <Settings className="h-5 w-5" />
+          </button>
+          
           <div className="text-xs text-right hidden md:block">
             <div className="text-slate-400">市场状态</div>
             <div className={`font-bold ${
@@ -539,10 +570,13 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content Grid */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar: Watchlist */}
-        <div style={{ width: leftPanelWidth }} className="shrink-0">
+      {/* Main Content Grid - 响应式布局 */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* === 桌面端：左侧自选股 (≥1024px) === */}
+        <div 
+          style={{ width: leftPanelWidth }} 
+          className="shrink-0 hidden lg:block"
+        >
           <StockList
             stocks={watchlist}
             selectedSymbol={selectedSymbol}
@@ -550,23 +584,68 @@ const App: React.FC = () => {
             onAddStock={handleAddStock}
             onRemoveStock={handleRemoveStock}
             marketIndices={marketIndices}
+            isMobile={false}
           />
         </div>
 
-        {/* Left Resize Handle */}
-        <ResizeHandle direction="horizontal" onResize={handleLeftResize} onResizeEnd={handleResizeEnd} />
+        {/* === 桌面端：左侧调整手柄 (≥1024px) === */}
+        <div className="hidden lg:block">
+          <ResizeHandle direction="horizontal" onResize={handleLeftResize} onResizeEnd={handleResizeEnd} />
+        </div>
 
-        {/* Center Panel: Charts & Data */}
-        <div className="flex-1 flex flex-col min-w-0 bg-transparent">
+        {/* === 移动端：自选股抽屉 (<768px) === */}
+        {isMobile && (
+          <div 
+            className={`
+              fixed inset-0 z-40 transition-transform duration-300
+              ${showMobileWatchlist ? 'translate-x-0' : '-translate-x-full'}
+            `}
+          >
+            <div className="absolute inset-0 bg-black/50" onClick={() => setShowMobileWatchlist(false)} />
+            <div className="absolute left-0 top-0 bottom-0 w-[85%] max-w-[360px] fin-panel shadow-2xl">
+              <StockList
+                stocks={watchlist}
+                selectedSymbol={selectedSymbol}
+                onSelect={(symbol) => {
+                  handleSelectStock(symbol);
+                  setShowMobileWatchlist(false);
+                }}
+                onAddStock={handleAddStock}
+                onRemoveStock={handleRemoveStock}
+                marketIndices={marketIndices}
+                isMobile={true}
+                onClose={() => setShowMobileWatchlist(false)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* === 中间区域：图表+盘口 === */}
+        <div className={`
+          flex-1 flex flex-col min-w-0 bg-transparent
+          ${isMobile && activeTab !== 'chart' ? 'hidden' : 'block'}
+        `}>
           {/* Stock Header - A股风格 */}
-          <div className="fin-panel-strong border-b fin-divider px-6 py-3 shrink-0">
+          <div className="fin-panel-strong border-b fin-divider px-3 md:px-6 py-2 md:py-3 shrink-0">
             <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <span className="text-lg font-bold text-white">{selectedStock.name}</span>
-                <span className="text-sm text-slate-400 font-mono">{selectedStock.symbol}</span>
+              <div className="flex items-center gap-2 md:gap-3">
+                {/* 移动端：显示菜单按钮 */}
+                {isMobile && (
+                  <button
+                    onClick={() => setShowMobileWatchlist(true)}
+                    className="p-2 -ml-2 rounded-lg hover:bg-slate-700/50 text-slate-300"
+                    aria-label="打开自选股"
+                  >
+                    <Menu className="h-5 w-5" />
+                  </button>
+                )}
+                <div className="flex flex-col md:flex-row md:items-center md:gap-3">
+                  <span className="text-base md:text-lg font-bold text-white">{selectedStock.name}</span>
+                  <span className="text-xs md:text-sm text-slate-400 font-mono">{selectedStock.symbol}</span>
+                </div>
                 <button
                   onClick={() => setShowPosition(true)}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-accent-2 hover:bg-slate-700/50 transition-colors"
+                  className="hidden sm:flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-accent-2 hover:bg-slate-700/50 transition-colors"
                   title="持仓设置"
                 >
                   <Briefcase className="h-3.5 w-3.5" />
@@ -576,25 +655,24 @@ const App: React.FC = () => {
                       const marketValue = pos.shares * selectedStock.price;
                       const costAmount = pos.shares * pos.costPrice;
                       const profitLoss = marketValue - costAmount;
-                      const profitPercent = costAmount > 0 ? (profitLoss / costAmount) * 100 : 0;
                       const isProfit = profitLoss >= 0;
                       return (
                         <span className={isProfit ? 'text-red-500' : 'text-green-500'}>
-                          {pos.shares}股 {isProfit ? '+' : ''}{profitLoss.toFixed(0)} ({isProfit ? '+' : ''}{profitPercent.toFixed(2)}%)
+                          {pos.shares}股 {isProfit ? '+' : ''}{profitLoss.toFixed(0)}
                         </span>
                       );
                     })()
                   ) : (
-                    <span>设置持仓</span>
+                    <span>持仓</span>
                   )}
                 </button>
               </div>
-              <div className={`text-3xl font-mono font-bold ${selectedStock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+              <div className={`text-xl md:text-3xl font-mono font-bold ${selectedStock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
                 {selectedStock.price.toFixed(2)}
               </div>
             </div>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-2 md:gap-4 text-xs md:text-sm">
                 <span className={`font-mono ${selectedStock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
                   {selectedStock.change >= 0 ? '+' : ''}{selectedStock.change.toFixed(2)}
                 </span>
@@ -602,14 +680,14 @@ const App: React.FC = () => {
                   {selectedStock.change >= 0 ? '+' : ''}{selectedStock.changePercent.toFixed(2)}%
                 </span>
               </div>
-              <div className="text-xs text-slate-500">
+              <div className="text-[10px] md:text-xs text-slate-500">
                 {new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </div>
             </div>
           </div>
           
           {/* A股传统行情数据 */}
-          <div className="grid grid-cols-4 gap-px p-2 fin-panel border-b fin-divider shrink-0 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-px p-1 md:p-2 fin-panel border-b fin-divider shrink-0 text-[10px] md:text-xs">
             <AStockStatItem label="今开" value={selectedStock.open} preClose={selectedStock.preClose} />
             <AStockStatItem label="最高" value={selectedStock.high} preClose={selectedStock.preClose} />
             <AStockStatItem label="成交量" value={formatVolume(selectedStock.volume)} isPlain />
@@ -620,41 +698,141 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex-1 flex flex-col min-h-0">
-             {/* Chart Section */}
-            <div className="flex-1 p-1 relative min-h-0">
-               <StockChart
-                  data={kLineData}
-                  period={timePeriod}
-                  onPeriodChange={setTimePeriod}
-                  stock={selectedStock}
-               />
-            </div>
-
-            {/* Bottom Resize Handle */}
-            <ResizeHandle direction="vertical" onResize={handleBottomResize} onResizeEnd={handleResizeEnd} />
-
-            {/* Bottom Info Panel: Order Book Only */}
-            <div style={{ height: bottomPanelHeight }} className="border-t fin-divider flex fin-panel shrink-0">
-               <div className="flex-1 overflow-hidden relative">
-                  <OrderBookComponent data={orderBook} />
+             {/* 桌面端：图表+盘口分开显示 */}
+             <div className={`
+               hidden lg:flex flex-1 flex-col min-h-0
+             `}>
+               <div className="flex-1 p-1 relative min-h-0">
+                  <StockChart
+                     data={kLineData}
+                     period={timePeriod}
+                     onPeriodChange={setTimePeriod}
+                     stock={selectedStock}
+                     isMobile={false}
+                  />
                </div>
-            </div>
-          </div>
+               
+               <div className="hidden lg:block">
+                 <ResizeHandle direction="vertical" onResize={handleBottomResize} onResizeEnd={handleResizeEnd} />
+               </div>
+               
+               <div 
+                 style={{ height: bottomPanelHeight }} 
+                 className="border-t fin-divider flex fin-panel shrink-0"
+               >
+                  <div className="flex-1 overflow-hidden relative">
+                     <OrderBookComponent data={orderBook} isMobile={false} />
+                  </div>
+               </div>
+             </div>
+             
+             {/* 移动端：图表+盘口合并页面 */}
+             <div className={`
+               flex lg:hidden flex-1 flex-col min-h-0
+               ${isMobile && activeTab !== 'chart' ? 'hidden' : 'block'}
+             `}>
+               <MobileChartPage
+                 data={kLineData}
+                 period={timePeriod}
+                 onPeriodChange={setTimePeriod}
+                 stock={selectedStock}
+                 orderBook={orderBook}
+               />
+             </div>
+           </div>
         </div>
 
-        {/* Right Resize Handle */}
-        <ResizeHandle direction="horizontal" onResize={handleRightResize} onResizeEnd={handleResizeEnd} />
+        {/* === 桌面端：右侧调整手柄 (≥1024px) === */}
+        <div className="hidden lg:block">
+          <ResizeHandle direction="horizontal" onResize={handleRightResize} onResizeEnd={handleResizeEnd} />
+        </div>
 
-        {/* Right Panel: AI Agents */}
-        <div style={{ width: rightPanelWidth }} className="shrink-0">
+        {/* === 桌面端：右侧AI讨论室 (≥1024px) === */}
+        <div 
+          style={{ width: rightPanelWidth }} 
+          className="shrink-0 hidden lg:block"
+        >
           <AgentRoom
             stock={selectedStock}
             kLineData={kLineData}
             session={currentSession}
             onSessionUpdate={setCurrentSession}
+            isMobile={false}
           />
         </div>
+
+        {/* === 移动端：AI讨论室全屏 (<768px) === */}
+        {isMobile && (
+          <div className={`
+            fixed inset-0 z-30 fin-panel
+            ${activeTab === 'chat' ? 'block' : 'hidden'}
+          `}>
+            <AgentRoom
+              stock={selectedStock}
+              kLineData={kLineData}
+              session={currentSession}
+              onSessionUpdate={setCurrentSession}
+              isMobile={true}
+            />
+          </div>
+        )}
       </div>
+
+      {/* === 移动端快讯弹窗 === */}
+      {isMobile && showTelegraphList && (
+        <div 
+          className="fixed inset-0 z-[55] flex items-start justify-center pt-20 bg-black/50 backdrop-blur-sm md:hidden"
+          onClick={() => setShowTelegraphList(false)}
+        >
+          <div 
+            className="w-[90%] max-w-md mx-4 fin-panel border fin-divider rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-3 border-b fin-divider flex items-center justify-between fin-panel-strong">
+              <span className="text-sm font-bold text-white flex items-center gap-2">
+                <Radio className="h-3 w-3 animate-pulse text-accent-2" />
+                财联社快讯
+              </span>
+              <button 
+                onClick={() => setShowTelegraphList(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-700/50 text-slate-400 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto fin-scrollbar">
+              {telegraphLoading ? (
+                <div className="p-8 text-center text-slate-500 text-sm">加载中...</div>
+              ) : telegraphList.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-sm">暂无快讯</div>
+              ) : (
+                telegraphList.map((tg, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => handleOpenTelegraph(tg)}
+                    className="p-3 border-b fin-divider last:border-b-0 hover:bg-slate-800/50 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="text-xs text-accent-2 font-mono shrink-0">{tg.time}</span>
+                      <span className="text-xs text-slate-300 leading-relaxed">{tg.content}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* === 移动端底部导航 (<768px) === */}
+      {isMobile && (
+        <MobileNav 
+          activeTab={activeTab} 
+          onTabChange={setActiveTab}
+          onShowLongHuBang={() => setShowLongHuBang(true)}
+          onShowHotTrend={() => setShowHotTrend(true)}
+        />
+      )}
 
       <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
       <PositionDialog
