@@ -276,3 +276,129 @@ body.grabbing,
 body.grabbing * {
     cursor: grabbing !important;
 }
+
+/* ============================================
+   移动端响应式样式
+   ============================================ */
+
+/* 安全区域支持 */
+.safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    padding-bottom: constant(safe-area-inset-bottom, 0);
+}
+
+.pb-safe {
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
+    padding-bottom: max(12px, constant(safe-area-inset-bottom, 12px));
+}
+
+/* 触摸优化 */
+@media (max-width: 767px) {
+    /* 增大触摸目标 */
+    button,
+    [role="button"],
+    input,
+    select,
+    textarea {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    /* 禁用文本选择（除输入框外） */
+    body {
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    input,
+    textarea {
+        user-select: text;
+        -webkit-user-select: text;
+    }
+
+    /* 优化滚动性能 */
+    .fin-scrollbar {
+        -webkit-overflow-scrolling: touch;
+        scroll-behavior: smooth;
+    }
+
+    /* 减小字体大小 */
+    .agent-message-content {
+        font-size: 0.8125rem;
+        line-height: 1.5;
+    }
+
+    /* 移动端动画优化 */
+    @media (prefers-reduced-motion: reduce) {
+        * {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+}
+
+/* 平板端优化 */
+@media (min-width: 768px) and (max-width: 1023px) {
+    .fin-panel {
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+}
+
+/* 防止移动端横屏时字体缩放 */
+@media screen and (max-width: 768px) and (orientation: landscape) {
+    html {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+    }
+}
+
+/* 触摸设备悬停优化 */
+@media (hover: none) {
+    .hover\:bg-slate-800\/60:hover,
+    .hover\:bg-slate-700\/50:hover {
+        background-color: transparent;
+    }
+
+    /* 点击态 */
+    .active\:scale-95:active {
+        transform: scale(0.95);
+    }
+}
+
+/* 底部导航栏阴影 */
+.safe-area-bottom {
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* 移动端抽屉动画优化 */
+@media (max-width: 767px) {
+    .transform {
+        will-change: transform;
+    }
+
+    /* 优化性能 */
+    .fin-panel {
+        contain: layout style;
+    }
+}
+
+/* 响应式字体 */
+@media (max-width: 359px) {
+    html {
+        font-size: 14px;
+    }
+}
+
+@media (min-width: 360px) and (max-width: 413px) {
+    html {
+        font-size: 15px;
+    }
+}
+
+@media (min-width: 414px) and (max-width: 767px) {
+    html {
+        font-size: 16px;
+    }
+}
