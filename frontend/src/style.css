@@ -15,8 +15,12 @@
         --stroke-strong: rgba(107, 142, 35, 0.28);
         --text-0: #e2e8e0;
         --text-1: #9ca88b;
+        --text-2: #6a7a5b;
         --accent: #6b8e23;
         --accent-2: #8fbc3b;
+        --shadow: rgba(0, 0, 0, 0.35);
+        --shadow-strong: rgba(0, 0, 0, 0.5);
+        --is-dark: 1;
     }
 
     html {
@@ -60,14 +64,14 @@
 
     .fin-panel {
         background: var(--panel);
-        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 color-mix(in srgb, var(--accent) 6%, transparent);
+        box-shadow: 0 12px 28px var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--accent) 6%, transparent);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
     }
 
     .fin-panel-strong {
         background: var(--panel-strong);
-        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 color-mix(in srgb, var(--accent) 8%, transparent);
+        box-shadow: 0 10px 24px var(--shadow-strong), inset 0 1px 0 color-mix(in srgb, var(--accent) 8%, transparent);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
     }
@@ -78,8 +82,33 @@
         -webkit-backdrop-filter: blur(8px);
     }
 
+    /* 卡片式面板 - 用于主要区块，带圆角和阴影 */
+    .fin-panel-card {
+        background: var(--panel);
+        border-radius: 12px;
+        box-shadow: 0 4px 16px var(--shadow), 0 1px 3px rgba(0, 0, 0, 0.1);
+        border: 1px solid var(--stroke);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    /* 中间面板 - 左右有圆角和边框阴影，上下紧贴 */
+    .fin-panel-center {
+        background: var(--panel);
+        border-left: 1px solid var(--stroke);
+        border-right: 1px solid var(--stroke);
+        box-shadow: -4px 0 16px var(--shadow), 4px 0 16px var(--shadow);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
     .fin-divider {
         border-color: var(--stroke);
+    }
+
+    /* 柔和分隔线 - 用于卡片内部分隔 */
+    .fin-divider-soft {
+        border-color: color-mix(in srgb, var(--stroke) 50%, transparent);
     }
 
     .fin-input {
@@ -105,7 +134,7 @@
     }
 
     .fin-glow {
-        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 16px 36px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 16px 36px var(--shadow-strong);
     }
 
     /* 自定义滚动条样式 */
@@ -177,7 +206,7 @@
     }
 
     .agent-message-content pre {
-        background: rgba(0, 0, 0, 0.4);
+        background: var(--bg-1);
         border: 1px solid var(--stroke);
         border-radius: 8px;
         padding: 0.75em;
@@ -269,6 +298,40 @@
     .bg-accent\/20 { background-color: color-mix(in srgb, var(--accent) 20%, transparent); }
     .border-accent\/30 { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
     .border-accent\/50 { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+    /* 主题自适应文字颜色 */
+    .text-theme-0 { color: var(--text-0); }
+    .text-theme-1 { color: var(--text-1); }
+    .text-theme-2 { color: var(--text-2); }
+    .bg-theme-0 { background-color: var(--bg-0); }
+    .bg-theme-1 { background-color: var(--bg-1); }
+
+    /* 浅色主题特殊适配 */
+    [data-theme-mode="light"] .fin-panel {
+        box-shadow: 0 4px 12px var(--shadow), 0 1px 3px var(--shadow);
+    }
+
+    [data-theme-mode="light"] .fin-panel-strong {
+        box-shadow: 0 6px 16px var(--shadow-strong), 0 2px 4px var(--shadow);
+    }
+
+    [data-theme-mode="light"] .fin-panel-card {
+        box-shadow: 0 2px 8px var(--shadow), 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+    [data-theme-mode="light"] .fin-glow {
+        box-shadow: 0 0 0 1px var(--stroke), 0 8px 20px var(--shadow);
+    }
+
+    /* 浅色主题下的背景网格调整 */
+    [data-theme-mode="light"] .fin-app {
+        background-image:
+            radial-gradient(1200px circle at 12% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 58%),
+            radial-gradient(900px circle at 105% 5%, color-mix(in srgb, var(--accent-2) 8%, transparent), transparent 48%),
+            linear-gradient(180deg, var(--bg-0), var(--bg-1)),
+            linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px),
+            linear-gradient(90deg, color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px);
+    }
 }
 
 /* 全局拖拽鼠标样式 */

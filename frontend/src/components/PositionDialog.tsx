@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Briefcase } from 'lucide-react';
 import type { StockPosition } from '../types';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface PositionDialogProps {
   isOpen: boolean;
@@ -21,6 +22,7 @@ export const PositionDialog: React.FC<PositionDialogProps> = ({
   position,
   onSave,
 }) => {
+  const { colors } = useTheme();
   const [shares, setShares] = useState<string>('');
   const [costPrice, setCostPrice] = useState<string>('');
 
@@ -61,22 +63,22 @@ export const PositionDialog: React.FC<PositionDialogProps> = ({
         <div className="flex items-center justify-between p-4 border-b fin-divider">
           <div className="flex items-center gap-2">
             <Briefcase className="h-5 w-5 text-accent-2" />
-            <span className="font-bold text-slate-100">持仓设置</span>
+            <span className={`font-bold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>持仓设置</span>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+            className={`p-1 rounded transition-colors ${colors.isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-slate-700'}`}
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         {/* Stock Info */}
-        <div className="px-4 py-3 border-b fin-divider bg-slate-800/30">
+        <div className={`px-4 py-3 border-b fin-divider ${colors.isDark ? 'bg-slate-800/30' : 'bg-slate-100/50'}`}>
           <div className="flex justify-between items-center">
             <div>
-              <span className="text-slate-100 font-medium">{stockName}</span>
-              <span className="ml-2 text-sm text-slate-400 font-mono">{stockCode}</span>
+              <span className={`font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{stockName}</span>
+              <span className={`ml-2 text-sm font-mono ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>{stockCode}</span>
             </div>
             <span className="text-lg font-mono text-accent-2">{currentPrice.toFixed(2)}</span>
           </div>
@@ -85,7 +87,7 @@ export const PositionDialog: React.FC<PositionDialogProps> = ({
         {/* Form */}
         <div className="p-4 space-y-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">持仓数量（股）</label>
+            <label className={`block text-sm mb-1 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>持仓数量（股）</label>
             <input
               type="number"
               value={shares}
@@ -97,7 +99,7 @@ export const PositionDialog: React.FC<PositionDialogProps> = ({
             />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">成本价（元）</label>
+            <label className={`block text-sm mb-1 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>成本价（元）</label>
             <input
               type="number"
               value={costPrice}
@@ -111,17 +113,17 @@ export const PositionDialog: React.FC<PositionDialogProps> = ({
 
           {/* Calculated Info */}
           {sharesNum > 0 && costPriceNum > 0 && (
-            <div className="p-3 rounded-lg bg-slate-800/50 space-y-2 text-sm">
+            <div className={`p-3 rounded-lg space-y-2 text-sm ${colors.isDark ? 'bg-slate-800/50' : 'bg-slate-100'}`}>
               <div className="flex justify-between">
-                <span className="text-slate-400">成本金额</span>
-                <span className="text-slate-200 font-mono">{costAmount.toFixed(2)}</span>
+                <span className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>成本金额</span>
+                <span className={`font-mono ${colors.isDark ? 'text-slate-200' : 'text-slate-700'}`}>{costAmount.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">市值</span>
-                <span className="text-slate-200 font-mono">{marketValue.toFixed(2)}</span>
+                <span className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>市值</span>
+                <span className={`font-mono ${colors.isDark ? 'text-slate-200' : 'text-slate-700'}`}>{marketValue.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">盈亏</span>
+                <span className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>盈亏</span>
                 <span className={`font-mono ${profitLoss >= 0 ? 'text-red-500' : 'text-green-500'}`}>
                   {profitLoss >= 0 ? '+' : ''}{profitLoss.toFixed(2)} ({profitLossPercent >= 0 ? '+' : ''}{profitLossPercent.toFixed(2)}%)
                 </span>
@@ -143,7 +145,7 @@ export const PositionDialog: React.FC<PositionDialogProps> = ({
           <div className="flex-1" />
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-700 transition-colors"
+            className={`px-4 py-2 rounded-lg text-sm transition-colors ${colors.isDark ? 'text-slate-400 hover:bg-slate-700' : 'text-slate-500 hover:bg-slate-200'}`}
           >
             取消
           </button>

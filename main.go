@@ -34,6 +34,8 @@ func main() {
 		Title:           "韭菜盘",
 		Width:           1920,
 		Height:          1080,
+		MinWidth:        1366,
+		MinHeight:       768,
 		Frameless:       true,
 		CSSDragProperty: "--wails-draggable",
 		CSSDragValue:    "drag",
