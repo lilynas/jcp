@@ -11,6 +11,8 @@ interface StockListProps {
   onAddStock: (stock: Stock) => void;
   onRemoveStock?: (symbol: string) => void;
   marketIndices?: MarketIndex[];
+  isMobile?: boolean;
+  onClose?: () => void;
 }
 
 export const StockList: React.FC<StockListProps> = ({
@@ -19,7 +21,9 @@ export const StockList: React.FC<StockListProps> = ({
   onSelect,
   onAddStock,
   onRemoveStock,
-  marketIndices
+  marketIndices,
+  isMobile = false,
+  onClose
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<StockSearchResult[]>([]);
@@ -93,9 +97,23 @@ export const StockList: React.FC<StockListProps> = ({
 
   return (
     <div className="flex flex-col h-full fin-panel border-r fin-divider relative">
-      <div className="p-4 fin-panel-strong border-b fin-divider">
+      <div className="p-3 md:p-4 fin-panel-strong border-b fin-divider">
+        {/* 移动端关闭按钮 */}
+        {isMobile && onClose && (
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-lg font-bold text-white">自选股</span>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-slate-700/50 text-slate-400 transition-colors"
+              aria-label="关闭"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        )}
+        
         {/* 大盘指数 */}
-        <div className="mb-4 pb-3 border-b fin-divider flex justify-center">
+        <div className="mb-3 md:mb-4 pb-2 md:pb-3 border-b fin-divider flex justify-center">
           <MarketIndices indices={marketIndices || []} />
         </div>
         <div ref={searchRef} className="relative z-50">
@@ -149,40 +167,47 @@ export const StockList: React.FC<StockListProps> = ({
             <div
               key={stock.symbol}
               onClick={() => onSelect(stock.symbol)}
-              className={`group p-4 border-b fin-divider cursor-pointer transition-colors hover:bg-slate-800/60 ${isSelected ? 'bg-slate-800/60 border-l-4 border-l-accent' : 'border-l-4 border-l-transparent'}`}
+              className={`
+                group border-b fin-divider cursor-pointer transition-colors hover:bg-slate-800/60
+                ${isSelected ? 'bg-slate-800/60 border-l-4 border-l-accent' : 'border-l-4 border-l-transparent'}
+                ${isMobile ? 'p-3 min-h-[72px]' : 'p-4'}
+              `}
             >
               <div className="flex justify-between items-start mb-1">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-100">{stock.name}</span>
+                    <span className="font-bold text-slate-100 text-sm md:text-base">{stock.name}</span>
                     {onRemoveStock && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           onRemoveStock(stock.symbol);
                         }}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-all"
+                        className={`
+                          p-1 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-all
+                          ${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+                        `}
                       >
-                        <X size={14} />
+                        <X size={isMobile ? 16 : 14} />
                       </button>
                     )}
                   </div>
-                  <div className="text-xs text-slate-400 font-mono truncate">{stock.symbol}</div>
+                  <div className="text-[10px] md:text-xs text-slate-400 font-mono truncate">{stock.symbol}</div>
                 </div>
                 <div className="text-right">
-                  <div className={`font-mono ${isPositive ? 'text-red-500' : 'text-green-500'}`}>
+                  <div className={`font-mono text-sm md:text-base ${isPositive ? 'text-red-500' : 'text-green-500'}`}>
                     {stock.price.toFixed(2)}
                   </div>
-                  <div className={`text-xs font-mono flex items-center justify-end ${isPositive ? 'text-red-500' : 'text-green-500'}`}>
+                  <div className={`text-[10px] md:text-xs font-mono flex items-center justify-end ${isPositive ? 'text-red-500' : 'text-green-500'}`}>
                     {isPositive ? <TrendingUp size={12} className="mr-1"/> : <TrendingDown size={12} className="mr-1"/>}
                     {isPositive ? '+' : ''}{stock.changePercent.toFixed(2)}%
                   </div>
                 </div>
               </div>
-              <div className="flex justify-between items-center text-xs text-slate-500 mt-2">
+              <div className="flex justify-between items-center text-[10px] md:text-xs text-slate-500 mt-1 md:mt-2">
                 <span>量: {formatVolume(stock.volume)}</span>
                 {stock.sector && (
-                  <span className="fin-chip px-1.5 py-0.5 rounded text-slate-300">{stock.sector}</span>
+                  <span className="fin-chip px-1.5 py-0.5 rounded text-slate-300 text-[10px]">{stock.sector}</span>
                 )}
               </div>
             </div>
