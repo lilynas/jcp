@@ -59,9 +59,10 @@ interface AgentRoomProps {
   kLineData: KLineData[];
   session: StockSession | null;
   onSessionUpdate: (session: StockSession) => void;
+  isMobile?: boolean;
 }
 
-export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }) => {
+export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate, isMobile = false }) => {
   const [allAgents, setAllAgents] = useState<AgentConfig[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [simulatingMap, setSimulatingMap] = useState<Record<string, boolean>>({});
@@ -511,7 +512,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 fin-panel-soft fin-scrollbar" ref={scrollRef}>
+      <div className={`flex-1 overflow-y-auto fin-panel-soft fin-scrollbar ${isMobile ? 'p-3 pb-32 space-y-3' : 'p-4 space-y-4'}`} ref={scrollRef}>
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-slate-500 text-sm p-8 text-center opacity-60">
             <MessageSquare size={32} className="mb-2" />
@@ -545,8 +546,8 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
             const displayName = msg.agentName || '老韭菜';
 
             return (
-               <div key={msg.id} className="flex gap-3 justify-end animate-in fade-in slide-in-from-bottom-2 duration-300">
-                 <div className="flex-1 text-right max-w-[85%]">
+               <div key={msg.id} className={`flex gap-2 md:gap-3 justify-end animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+                 <div className={`flex-1 text-right ${isMobile ? 'max-w-[90%]' : 'max-w-[85%]'}`}>
                     <div className="flex items-baseline gap-2 mb-1 justify-end">
                       <span className="text-xs font-bold text-accent-2">{displayName}</span>
                       {mentionNames.length > 0 && (
@@ -562,7 +563,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
                         <span className="line-clamp-1">{quotedMsg.content}</span>
                       </div>
                     )}
-                    <div className="inline-block text-left text-sm text-white bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] p-3 rounded-2xl rounded-tr-none shadow-sm">
+                    <div className="inline-block text-left text-sm text-white bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] p-2.5 md:p-3 rounded-2xl rounded-tr-none shadow-sm">
                       {msg.content}
                     </div>
                     {/* 失败时显示重试/编辑按钮 */}
@@ -709,7 +710,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
       </div>
 
       {/* Input Area */}
-      <div className="p-3 border-t fin-divider fin-panel-strong shrink-0">
+      <div className={`p-3 border-t fin-divider fin-panel-strong shrink-0 ${isMobile ? 'pb-safe' : ''}`}>
         {/* 引用预览 */}
         {replyToMessage && (
           <div className="flex items-center gap-2 mb-2 p-2 bg-slate-800/50 rounded-lg border-l-2 border-accent">

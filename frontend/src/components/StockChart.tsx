@@ -19,6 +19,7 @@ interface StockChartProps {
   period: TimePeriod;
   onPeriodChange: (p: TimePeriod) => void;
   stock?: Stock;
+  isMobile?: boolean;
 }
 
 // Custom shape for candlestick
@@ -50,7 +51,7 @@ const Candlestick = (props: any) => {
   );
 };
 
-export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodChange, stock }) => {
+export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodChange, stock, isMobile = false }) => {
   // 确保 data 不为 null
   const safeData = data || [];
   // 缩放和滑动状态
@@ -61,6 +62,11 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
   const chartRef = useRef<HTMLDivElement>(null);
   const lastX = useRef(0);
   const prevPeriod = useRef(period);
+  
+  // 触摸状态
+  const touchStartX = useRef(0);
+  const touchStartDistance = useRef(0);
+  const [touchHint, setTouchHint] = useState(true);
 
   // 统一处理数据和周期变化
   useEffect(() => {
@@ -133,6 +139,67 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
       document.body.classList.remove('grabbing');
     };
   }, [isDragging]);
+
+  // 触摸手势处理
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (isIntraday) return;
+    
+    if (e.touches.length === 1) {
+      // 单指滑动
+      touchStartX.current = e.touches[0].clientX;
+      setIsDragging(true);
+    } else if (e.touches.length === 2) {
+      // 双指缩放
+      const distance = Math.hypot(
+        e.touches[0].pageX - e.touches[1].pageX,
+        e.touches[0].pageY - e.touches[1].pageY
+      );
+      touchStartDistance.current = distance;
+    }
+    
+    // 隐藏提示
+    if (touchHint) {
+      setTimeout(() => setTouchHint(false), 3000);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (isIntraday) return;
+    e.preventDefault();
+    
+    if (e.touches.length === 1 && isDragging) {
+      // 单指滑动
+      const deltaX = e.touches[0].clientX - touchStartX.current;
+      const sensitivity = Math.max(1, Math.floor(visibleCount / 20));
+      
+      if (Math.abs(deltaX) > 20) {
+        const move = deltaX > 0 ? -sensitivity : sensitivity;
+        setStartIndex(prev => Math.max(0, Math.min(safeData.length - visibleCount, prev + move)));
+        touchStartX.current = e.touches[0].clientX;
+      }
+    } else if (e.touches.length === 2) {
+      // 双指缩放
+      const distance = Math.hypot(
+        e.touches[0].pageX - e.touches[1].pageX,
+        e.touches[0].pageY - e.touches[1].pageY
+      );
+      const scale = distance / touchStartDistance.current;
+      
+      if (scale > 1.1) {
+        // 放大 - 减少可见数据点
+        setVisibleCount(prev => Math.max(20, prev - 5));
+        touchStartDistance.current = distance;
+      } else if (scale < 0.9) {
+        // 缩小 - 增加可见数据点
+        setVisibleCount(prev => Math.min(safeData.length, prev + 5));
+        touchStartDistance.current = distance;
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    setIsDragging(false);
+  };
 
   // Guard clause for empty data
   if (safeData.length === 0) {
@@ -224,19 +291,22 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
 
       <div
         ref={chartRef}
-        className={`flex-1 min-h-0 relative transition-all duration-200 ${
-          !isIntraday
+        className={`flex-1 min-h-0 relative transition-all duration-200 touch-pan-x touch-pan-y ${
+          !isIntraday && !isMobile
             ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') + ' ' + (isHovering ? 'ring-1 ring-slate-600/50 ring-inset bg-slate-800/20' : '')
             : ''
         }`}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseEnter={() => setIsHovering(true)}
-        onMouseLeave={() => setIsHovering(false)}
+        onWheel={!isMobile ? handleWheel : undefined}
+        onMouseDown={!isMobile ? handleMouseDown : undefined}
+        onMouseMove={!isMobile ? handleMouseMove : undefined}
+        onMouseEnter={() => !isMobile && setIsHovering(true)}
+        onMouseLeave={() => !isMobile && setIsHovering(false)}
+        onTouchStart={isMobile ? handleTouchStart : undefined}
+        onTouchMove={isMobile ? handleTouchMove : undefined}
+        onTouchEnd={isMobile ? handleTouchEnd : undefined}
       >
-        {/* 悬停提示 */}
-        {!isIntraday && isHovering && (
+        {/* 桌面端悬停提示 */}
+        {!isIntraday && !isMobile && isHovering && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-3 py-1.5 rounded-full bg-slate-900/90 border border-slate-700/50 text-xs text-slate-400 backdrop-blur-sm">
             <span className="flex items-center gap-1">
               <ZoomIn size={12} className="text-slate-500" />
@@ -248,6 +318,13 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
               <MoveHorizontal size={12} className="text-slate-500" />
               拖拽滑动
             </span>
+          </div>
+        )}
+        
+        {/* 移动端触摸提示 */}
+        {isMobile && !isIntraday && touchHint && (
+          <div className="absolute top-2 right-2 z-20 px-2 py-1 rounded-full bg-slate-900/80 border border-slate-700/50 text-[10px] text-slate-400 backdrop-blur-sm animate-pulse">
+            双指缩放 / 滑动查看
           </div>
         )}
         <ResponsiveContainer width="100%" height="100%">

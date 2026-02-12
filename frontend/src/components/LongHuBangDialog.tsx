@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, TrendingUp, RefreshCw, Calendar } from 'lucide-react';
+import { X, TrendingUp, RefreshCw, Calendar, ChevronLeft } from 'lucide-react';
 import { getLongHuBangList, getLongHuBangDetail, LongHuBangItem, LongHuBangDetail } from '../services/configService';
 
 interface LongHuBangDialogProps {
@@ -82,35 +82,57 @@ export const LongHuBangDialog: React.FC<LongHuBangDialogProps> = ({ isOpen, onCl
     }
   };
 
+  const [isMobile, setIsMobile] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-[950px] h-[700px] fin-panel border fin-divider rounded-xl shadow-2xl flex flex-col overflow-hidden">
+      <div className={`relative fin-panel border fin-divider shadow-2xl flex flex-col overflow-hidden ${
+        isMobile ? 'w-full h-full rounded-none' : 'w-[950px] h-[700px] rounded-xl'
+      }`}>
         <DialogHeader
           onClose={onClose}
           onRefresh={() => loadList(1, tradeDate, false)}
           loading={loading}
           tradeDate={tradeDate}
           onDateChange={handleDateChange}
+          isMobile={isMobile}
         />
-        <div className="flex-1 flex overflow-hidden">
+        <div className={`flex-1 flex overflow-hidden ${isMobile ? 'relative' : ''}`}>
           <ItemList
             items={items}
             loading={loading}
             loadingMore={loadingMore}
             hasMore={hasMore}
             selectedItem={selectedItem}
-            onSelect={setSelectedItem}
+            onSelect={(item) => {
+              setSelectedItem(item);
+              if (isMobile) setShowDetail(true);
+            }}
             setDetails={setDetails}
             setDetailLoading={setDetailLoading}
             onLoadMore={handleLoadMore}
+            isMobile={isMobile}
           />
           <DetailPanel
             item={selectedItem}
             details={details}
             loading={detailLoading}
+            isMobile={isMobile}
+            showDetail={showDetail}
+            onCloseDetail={() => setShowDetail(false)}
           />
         </div>
       </div>
@@ -125,23 +147,24 @@ const DialogHeader: React.FC<{
   loading: boolean;
   tradeDate: string;
   onDateChange: (date: string) => void;
-}> = ({ onClose, onRefresh, loading, tradeDate, onDateChange }) => (
-  <div className="flex items-center justify-between px-5 py-4 border-b fin-divider">
-    <div className="flex items-center gap-3">
+  isMobile?: boolean;
+}> = ({ onClose, onRefresh, loading, tradeDate, onDateChange, isMobile }) => (
+  <div className="flex items-center justify-between px-3 md:px-5 py-3 md:py-4 border-b fin-divider shrink-0">
+    <div className="flex items-center gap-2 md:gap-3">
       <TrendingUp className="w-5 h-5 text-red-500" />
-      <h2 className="text-lg font-semibold fin-text-primary">龙虎榜</h2>
+      <h2 className="text-base md:text-lg font-semibold fin-text-primary">龙虎榜</h2>
     </div>
-    <div className="flex items-center gap-3">
-      <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 md:gap-3">
+      <div className="flex items-center gap-1 md:gap-2">
         <Calendar className="w-4 h-4 fin-text-tertiary" />
         <input
           type="date"
           value={tradeDate}
           onChange={(e) => onDateChange(e.target.value)}
-          className="px-2 py-1 text-sm rounded-lg fin-panel border fin-divider fin-text-primary bg-transparent focus:outline-none focus:ring-1 focus:ring-accent"
+          className="px-2 py-1 text-xs md:text-sm rounded-lg fin-panel border fin-divider fin-text-primary bg-transparent focus:outline-none focus:ring-1 focus:ring-accent"
           max={new Date().toISOString().split('T')[0]}
         />
-        {tradeDate && (
+        {!isMobile && tradeDate && (
           <button
             onClick={() => onDateChange('')}
             className="text-xs fin-text-tertiary hover:fin-text-secondary"
@@ -175,7 +198,8 @@ const ItemList: React.FC<{
   setDetails: (details: LongHuBangDetail[]) => void;
   setDetailLoading: (loading: boolean) => void;
   onLoadMore: () => void;
-}> = ({ items, loading, loadingMore, hasMore, selectedItem, onSelect, setDetails, setDetailLoading, onLoadMore }) => {
+  isMobile?: boolean;
+}> = ({ items, loading, loadingMore, hasMore, selectedItem, onSelect, setDetails, setDetailLoading, onLoadMore, isMobile }) => {
   const listRef = React.useRef<HTMLDivElement>(null);
 
   // 滚动到底部时加载更多
@@ -207,7 +231,7 @@ const ItemList: React.FC<{
 
   if (loading) {
     return (
-      <div className="w-[380px] border-r fin-divider flex items-center justify-center">
+      <div className={`${isMobile ? 'w-full' : 'w-[380px]'} border-r fin-divider flex items-center justify-center`}>
         <RefreshCw className="w-6 h-6 fin-text-secondary animate-spin" />
       </div>
     );
@@ -217,21 +241,21 @@ const ItemList: React.FC<{
     <div
       ref={listRef}
       onScroll={handleScroll}
-      className="w-[380px] border-r fin-divider overflow-y-auto fin-scrollbar"
+      className={`${isMobile ? 'w-full' : 'w-[380px]'} border-r fin-divider overflow-y-auto fin-scrollbar`}
     >
       {items.map((item, idx) => (
         <div
           key={`${item.code}-${item.tradeDate}-${idx}`}
           onClick={() => handleSelect(item)}
-          className={`px-4 py-3 border-b fin-divider cursor-pointer transition-all ${
+          className={`px-3 md:px-4 py-2.5 md:py-3 border-b fin-divider cursor-pointer transition-all ${
             selectedItem?.code === item.code && selectedItem?.tradeDate === item.tradeDate
               ? 'bg-accent/10 border-l-2 border-l-accent'
               : 'hover:bg-slate-500/5 border-l-2 border-l-transparent'
           }`}
         >
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-2">
-              <span className="font-medium fin-text-primary">{item.name}</span>
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-1.5 md:gap-2">
+              <span className="font-medium fin-text-primary text-sm md:text-base">{item.name}</span>
               <span className="text-xs fin-text-tertiary font-mono">{item.code}</span>
             </div>
             <span className={`text-sm font-mono font-medium ${item.changePercent >= 0 ? 'text-red-500' : 'text-green-500'}`}>
@@ -244,7 +268,7 @@ const ItemList: React.FC<{
               净买入 {formatAmount(item.netBuyAmt)}
             </span>
           </div>
-          <div className="text-xs fin-text-tertiary mt-1.5 truncate">{item.reason}</div>
+          <div className="text-xs fin-text-tertiary mt-1 truncate">{item.reason}</div>
         </div>
       ))}
       {loadingMore && (
@@ -292,9 +316,10 @@ const BrokerSection: React.FC<{
   details: LongHuBangDetail[];
   type: 'buy' | 'sell';
   formatAmount: (amt: number) => string;
-}> = ({ title, details, type, formatAmount }) => (
-  <div className="mb-5">
-    <div className={`flex items-center gap-2 mb-3 pb-2 border-b ${type === 'buy' ? 'border-red-500/20' : 'border-green-500/20'}`}>
+  isMobile?: boolean;
+}> = ({ title, details, type, formatAmount, isMobile }) => (
+  <div className="mb-3 md:mb-5">
+    <div className={`flex items-center gap-2 mb-2 md:mb-3 pb-2 border-b ${type === 'buy' ? 'border-red-500/20' : 'border-green-500/20'}`}>
       <div className={`w-1 h-4 rounded ${type === 'buy' ? 'bg-red-500' : 'bg-green-500'}`} />
       <h3 className={`text-sm font-medium ${type === 'buy' ? 'text-red-500' : 'text-green-500'}`}>
         {title}
@@ -304,7 +329,7 @@ const BrokerSection: React.FC<{
       <div className="text-sm fin-text-tertiary text-center py-4">暂无数据</div>
     ) : (
       <div className="space-y-1">
-        {details.slice(0, 5).map((d, idx) => (
+        {details.slice(0, isMobile ? 5 : 5).map((d, idx) => (
           <BrokerRow key={idx} index={idx} detail={d} type={type} formatAmount={formatAmount} />
         ))}
       </div>
@@ -328,16 +353,17 @@ const StatCard: React.FC<{
 const StockHeader: React.FC<{
   item: LongHuBangItem;
   formatAmount: (amt: number) => string;
-}> = ({ item, formatAmount }) => (
-  <div className="mb-5">
-    <div className="flex items-baseline gap-3 mb-4">
-      <span className="text-2xl font-bold fin-text-primary">{item.name}</span>
-      <span className="text-sm fin-text-tertiary font-mono">{item.code}</span>
-      <span className={`text-lg font-mono font-semibold ml-auto ${item.changePercent >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+  isMobile?: boolean;
+}> = ({ item, formatAmount, isMobile }) => (
+  <div className="mb-3 md:mb-5">
+    <div className="flex items-baseline gap-2 md:gap-3 mb-2 md:mb-4">
+      <span className="text-xl md:text-2xl font-bold fin-text-primary">{item.name}</span>
+      <span className="text-xs md:text-sm fin-text-tertiary font-mono">{item.code}</span>
+      <span className={`text-base md:text-lg font-mono font-semibold ml-auto ${item.changePercent >= 0 ? 'text-red-500' : 'text-green-500'}`}>
         {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
       </span>
     </div>
-    <div className="grid grid-cols-2 gap-3">
+    <div className={`grid ${isMobile ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-3'} gap-2 md:gap-3`}>
       <StatCard label="收盘价" value={item.closePrice.toFixed(2)} />
       <StatCard label="换手率" value={`${item.turnoverRate.toFixed(2)}%`} />
       <StatCard label="净买入" value={formatAmount(item.netBuyAmt)} valueClass="text-red-500" />
@@ -345,7 +371,7 @@ const StockHeader: React.FC<{
       <StatCard label="买入额" value={formatAmount(item.buyAmt)} valueClass="text-red-400" />
       <StatCard label="卖出额" value={formatAmount(item.sellAmt)} valueClass="text-green-400" />
     </div>
-    <div className="mt-3 px-3 py-2 rounded-lg bg-slate-500/5">
+    <div className="mt-2 md:mt-3 px-2 md:px-3 py-1.5 md:py-2 rounded-lg bg-slate-500/5">
       <span className="text-xs fin-text-tertiary">上榜原因: </span>
       <span className="text-xs fin-text-secondary">{item.reason}</span>
     </div>
@@ -357,7 +383,10 @@ const DetailPanel: React.FC<{
   item: LongHuBangItem | null;
   details: LongHuBangDetail[];
   loading: boolean;
-}> = ({ item, details, loading }) => {
+  isMobile?: boolean;
+  showDetail?: boolean;
+  onCloseDetail?: () => void;
+}> = ({ item, details, loading, isMobile, showDetail, onCloseDetail }) => {
   const formatAmount = (amt: number) => {
     if (Math.abs(amt) >= 100000000) {
       return (amt / 100000000).toFixed(2) + '亿';
@@ -385,10 +414,19 @@ const DetailPanel: React.FC<{
   const sellDetails = details.filter(d => d.direction === 'sell');
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 fin-scrollbar">
-      <StockHeader item={item} formatAmount={formatAmount} />
-      <BrokerSection title="买入前五营业部" details={buyDetails} type="buy" formatAmount={formatAmount} />
-      <BrokerSection title="卖出前五营业部" details={sellDetails} type="sell" formatAmount={formatAmount} />
+    <div className={`flex-1 overflow-y-auto p-3 md:p-4 fin-scrollbar ${isMobile ? 'absolute inset-0 bg-[var(--bg-1)] z-10' : ''} ${isMobile && showDetail ? 'block' : isMobile ? 'hidden' : 'block'}`}>
+      {isMobile && onCloseDetail && (
+        <button
+          onClick={onCloseDetail}
+          className="mb-3 flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          返回列表
+        </button>
+      )}
+      <StockHeader item={item} formatAmount={formatAmount} isMobile={isMobile} />
+      <BrokerSection title="买入前五营业部" details={buyDetails} type="buy" formatAmount={formatAmount} isMobile={isMobile} />
+      <BrokerSection title="卖出前五营业部" details={sellDetails} type="sell" formatAmount={formatAmount} isMobile={isMobile} />
     </div>
   );
 };
