@@ -165,7 +165,8 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (isIntraday) return;
-    e.preventDefault();
+    // Note: preventDefault not called here because touch events are passive by default
+    // Use CSS touch-action: none on the container instead
     
     if (e.touches.length === 1 && isDragging) {
       // 单指滑动
@@ -291,7 +292,8 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
 
       <div
         ref={chartRef}
-        className={`flex-1 min-h-0 relative transition-all duration-200 touch-pan-x touch-pan-y ${
+        style={isMobile ? { touchAction: 'none' } : undefined}
+        className={`flex-1 min-h-0 relative transition-all duration-200 ${
           !isIntraday && !isMobile
             ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') + ' ' + (isHovering ? 'ring-1 ring-slate-600/50 ring-inset bg-slate-800/20' : '')
             : ''

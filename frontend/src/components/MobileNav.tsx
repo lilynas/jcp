@@ -107,7 +107,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         </div>
       </nav>
 
-      {/* 收起按钮 - 固定在屏幕右侧，不跟随dock移动 */}
+      {/* Dock栏收起按钮 - 始终固定在右侧 */}
       {isDockVisible && (
         <button
           onClick={toggleDock}
@@ -118,11 +118,11 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         </button>
       )}
 
-      {/* 浮动展开按钮 - 当dock收起时显示，固定在屏幕底部中央 */}
+      {/* Dock栏展开按钮 - 当dock收起时显示，始终固定在右侧 */}
       {!isDockVisible && (
         <button
           onClick={toggleDock}
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] w-12 h-12 rounded-full fin-panel border fin-divider shadow-lg flex items-center justify-center transition-all duration-200 active:scale-95 hover:bg-slate-800 md:hidden"
+          className="fixed bottom-20 right-4 z-[60] w-10 h-10 rounded-full fin-panel border fin-divider shadow-lg flex items-center justify-center transition-all duration-200 active:scale-95 hover:bg-slate-800/80 md:hidden"
           aria-label="展开导航栏"
         >
           <ChevronUp className="w-5 h-5 text-slate-400" />
