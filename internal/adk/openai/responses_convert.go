@@ -9,7 +9,7 @@ import (
 )
 
 // toResponsesRequest 将 ADK 请求转换为 Responses API 请求
-func toResponsesRequest(req *model.LLMRequest, modelName string) (CreateResponseRequest, error) {
+func toResponsesRequest(req *model.LLMRequest, modelName string, noSystemRole bool) (CreateResponseRequest, error) {
 	// 转换 input 消息
 	inputItems, err := toResponsesInputItems(req.Contents)
 	if err != nil {
@@ -25,9 +25,33 @@ func toResponsesRequest(req *model.LLMRequest, modelName string) (CreateResponse
 		return apiReq, nil
 	}
 
-	// 提取系统指令到顶层 instructions 字段
+	// 处理系统指令
 	if req.Config.SystemInstruction != nil {
-		apiReq.Instructions = extractTextFromContent(req.Config.SystemInstruction)
+		systemText := extractTextFromContent(req.Config.SystemInstruction)
+		if noSystemRole {
+			// 不支持 instructions 字段，将系统指令注入到第一条 user input 前面
+			injected := false
+			for i, item := range inputItems {
+				if item.Role == "user" {
+					if s, ok := item.Content.(string); ok {
+						inputItems[i].Content = systemText + "\n\n" + s
+					} else {
+						inputItems[i].Content = systemText
+					}
+					injected = true
+					break
+				}
+			}
+			if !injected {
+				inputItems = append([]ResponsesInputItem{{
+					Role:    "user",
+					Content: systemText,
+				}}, inputItems...)
+			}
+			apiReq.Input = inputItems
+		} else {
+			apiReq.Instructions = systemText
+		}
 	}
 
 	// 处理 thinking/reasoning 配置
@@ -197,7 +221,20 @@ func convertResponsesResponse(resp *CreateResponseResponse) (*model.LLMResponse,
 			for _, part := range item.Content {
 				switch part.Type {
 				case "output_text":
-					content.Parts = append(content.Parts, &genai.Part{Text: part.Text})
+					// 解析第三方特殊工具调用标记
+					vendorCalls, cleanedText := parseVendorToolCalls(part.Text)
+					if cleanedText != "" {
+						content.Parts = append(content.Parts, &genai.Part{Text: cleanedText})
+					}
+					for i, vc := range vendorCalls {
+						content.Parts = append(content.Parts, &genai.Part{
+							FunctionCall: &genai.FunctionCall{
+								ID:   fmt.Sprintf("vendor_call_%d", i),
+								Name: vc.Name,
+								Args: vc.Args,
+							},
+						})
+					}
 				case "reasoning":
 					content.Parts = append(content.Parts, &genai.Part{
 						Text:    part.Text,

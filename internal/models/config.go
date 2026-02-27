@@ -26,6 +26,8 @@ type AIConfig struct {
 	// 是否发送高级参数 (temperature, top_p, max_tokens 等)
 	// 某些模型 (如 GPT-5.2 beta) 不支持这些参数
 	SendParams bool `json:"sendParams"`
+	// 不支持 system role（自动检测，用户不可见）
+	NoSystemRole bool `json:"noSystemRole"`
 	// Vertex AI 专用字段
 	Project         string `json:"project"`
 	Location        string `json:"location"`
@@ -64,6 +66,7 @@ type AppConfig struct {
 	Memory        MemoryConfig      `json:"memory"`        // 记忆管理配置
 	Proxy         ProxyConfig       `json:"proxy"`         // 代理配置
 	Layout        LayoutConfig      `json:"layout"`        // 界面布局配置
+	OpenClaw      OpenClawConfig    `json:"openClaw"`      // OpenClaw 服务配置
 }
 
 // ProxyMode 代理模式
@@ -98,4 +101,11 @@ type LayoutConfig struct {
 	BottomPanelHeight int `json:"bottomPanelHeight"` // 底部面板高度(px)
 	WindowWidth       int `json:"windowWidth"`       // 窗口宽度(px)
 	WindowHeight      int `json:"windowHeight"`      // 窗口高度(px)
+}
+
+// OpenClawConfig OpenClaw 服务配置
+type OpenClawConfig struct {
+	Enabled bool   `json:"enabled"` // 是否启用
+	Port    int    `json:"port"`    // 监听端口
+	APIKey  string `json:"apiKey"`  // API 鉴权密钥（可选）
 }

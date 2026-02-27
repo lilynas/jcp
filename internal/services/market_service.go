@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/run-bigpig/jcp/internal/logger"
 	"github.com/run-bigpig/jcp/internal/models"
+	"github.com/run-bigpig/jcp/internal/pkg/paths"
 	"github.com/run-bigpig/jcp/internal/pkg/proxy"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -21,10 +25,15 @@ import (
 
 var log = logger.New("market")
 
+// 预编译正则表达式，避免重复编译
+var (
+	sinaStockRegex = regexp.MustCompile(`var hq_str_(\w+)="([^"]*)"`)
+	sinaIndexRegex = regexp.MustCompile(`var hq_str_s_(\w+)="([^"]*)"`)
+)
+
 const (
-	sinaStockURL  = "http://hq.sinajs.cn/rn=%d&list=%s"
-	sinaKLineURL  = "http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=5,10,20&datalen=%d"
-	holidayAPIURL = "https://holiday.dreace.top/"
+	sinaStockURL = "http://hq.sinajs.cn/rn=%d&list=%s"
+	sinaKLineURL = "http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=5,10,20&datalen=%d"
 )
 
 // 默认大盘指数代码
@@ -46,6 +55,12 @@ type stockCache struct {
 	timestamp time.Time
 }
 
+// klineCache K线数据缓存
+type klineCache struct {
+	data      []models.KLineData
+	timestamp time.Time
+}
+
 // MarketStatus 市场交易状态
 type MarketStatus struct {
 	Status      string `json:"status"`      // trading, closed, pre_market, lunch_break
@@ -54,11 +69,19 @@ type MarketStatus struct {
 	HolidayName string `json:"holidayName"` // 节假日名称（如有）
 }
 
-// todayHolidayCache 当天节假日缓存
-type todayHolidayCache struct {
-	isHoliday bool
-	note      string
-	timestamp time.Time
+// TradingPeriod 交易时段
+type TradingPeriod struct {
+	Status    string `json:"status"`    // 状态标识
+	Text      string `json:"text"`      // 中文描述
+	StartTime string `json:"startTime"` // 开始时间 HH:MM
+	EndTime   string `json:"endTime"`   // 结束时间 HH:MM
+}
+
+// TradingSchedule 交易时间表
+type TradingSchedule struct {
+	IsTradeDay  bool            `json:"isTradeDay"`  // 今天是否交易日
+	HolidayName string          `json:"holidayName"` // 节假日名称
+	Periods     []TradingPeriod `json:"periods"`     // 时段列表
 }
 
 // MarketService 市场数据服务
@@ -70,18 +93,56 @@ type MarketService struct {
 	cacheMu  sync.RWMutex
 	cacheTTL time.Duration
 
-	// 当天节假日缓存
-	todayCache   *todayHolidayCache
-	todayCacheMu sync.RWMutex
+	// K线数据缓存
+	klineCache    map[string]*klineCache
+	klineCacheMu  sync.RWMutex
+	klineCacheTTL time.Duration
 }
 
 // NewMarketService 创建市场数据服务
 func NewMarketService() *MarketService {
-	return &MarketService{
-		client:   proxy.GetManager().GetClientWithTimeout(10 * time.Second),
-		cache:    make(map[string]*stockCache),
-		cacheTTL: 2 * time.Second, // 缓存2秒，避免频繁请求
+	ms := &MarketService{
+		client:        proxy.GetManager().GetClientWithTimeout(10 * time.Second),
+		cache:         make(map[string]*stockCache),
+		cacheTTL:      2 * time.Second, // 股票缓存2秒
+		klineCache:    make(map[string]*klineCache),
+		klineCacheTTL: 2 * time.Second, // K线缓存2秒
 	}
+	// 启动缓存清理协程
+	go ms.cleanCacheLoop()
+	return ms
+}
+
+// cleanCacheLoop 定期清理过期缓存，防止内存泄漏
+func (ms *MarketService) cleanCacheLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		ms.cleanExpiredCache()
+	}
+}
+
+// cleanExpiredCache 清理过期缓存
+func (ms *MarketService) cleanExpiredCache() {
+	now := time.Now()
+
+	// 清理股票缓存
+	ms.cacheMu.Lock()
+	for key, cached := range ms.cache {
+		if now.Sub(cached.timestamp) > 10*time.Second {
+			delete(ms.cache, key)
+		}
+	}
+	ms.cacheMu.Unlock()
+
+	// 清理K线缓存
+	ms.klineCacheMu.Lock()
+	for key, cached := range ms.klineCache {
+		if now.Sub(cached.timestamp) > 10*time.Second {
+			delete(ms.klineCache, key)
+		}
+	}
+	ms.klineCacheMu.Unlock()
 }
 
 // GetStockDataWithOrderBook 获取股票实时数据（含真实盘口），带缓存
@@ -90,7 +151,11 @@ func (ms *MarketService) GetStockDataWithOrderBook(codes ...string) ([]StockWith
 		return nil, nil
 	}
 
-	cacheKey := strings.Join(codes, ",")
+	// 排序codes保证缓存key一致性
+	sortedCodes := make([]string, len(codes))
+	copy(sortedCodes, codes)
+	sort.Strings(sortedCodes)
+	cacheKey := strings.Join(sortedCodes, ",")
 
 	// 检查缓存
 	ms.cacheMu.RLock()
@@ -148,8 +213,7 @@ func (ms *MarketService) fetchStockDataWithOrderBook(codes ...string) ([]StockWi
 // parseSinaStockDataWithOrderBook 解析新浪股票数据（含盘口）
 func (ms *MarketService) parseSinaStockDataWithOrderBook(data string) ([]StockWithOrderBook, error) {
 	var stocks []StockWithOrderBook
-	re := regexp.MustCompile(`var hq_str_(\w+)="([^"]*)"`)
-	matches := re.FindAllStringSubmatch(data, -1)
+	matches := sinaStockRegex.FindAllStringSubmatch(data, -1)
 
 	for _, match := range matches {
 		if len(match) < 3 || match[2] == "" {
@@ -198,8 +262,7 @@ func (ms *MarketService) GetStockRealTimeData(codes ...string) ([]models.Stock, 
 // parseSinaStockData 解析新浪股票数据
 func (ms *MarketService) parseSinaStockData(data string, codes []string) ([]models.Stock, error) {
 	var stocks []models.Stock
-	re := regexp.MustCompile(`var hq_str_(\w+)="([^"]*)"`)
-	matches := re.FindAllStringSubmatch(data, -1)
+	matches := sinaStockRegex.FindAllStringSubmatch(data, -1)
 
 	for _, match := range matches {
 		if len(match) < 3 || match[2] == "" {
@@ -326,8 +389,39 @@ func (ms *MarketService) calculateOrderBookTotals(items []models.OrderBookItem) 
 	}
 }
 
-// GetKLineData 获取K线数据
+// GetKLineData 获取K线数据（带缓存）
 func (ms *MarketService) GetKLineData(code string, period string, days int) ([]models.KLineData, error) {
+	cacheKey := fmt.Sprintf("%s:%s:%d", code, period, days)
+
+	// 检查缓存
+	ms.klineCacheMu.RLock()
+	if cached, ok := ms.klineCache[cacheKey]; ok {
+		if time.Since(cached.timestamp) < ms.klineCacheTTL {
+			ms.klineCacheMu.RUnlock()
+			return cached.data, nil
+		}
+	}
+	ms.klineCacheMu.RUnlock()
+
+	// 从API获取数据
+	klines, err := ms.fetchKLineData(code, period, days)
+	if err != nil {
+		return nil, err
+	}
+
+	// 更新缓存
+	ms.klineCacheMu.Lock()
+	ms.klineCache[cacheKey] = &klineCache{
+		data:      klines,
+		timestamp: time.Now(),
+	}
+	ms.klineCacheMu.Unlock()
+
+	return klines, nil
+}
+
+// fetchKLineData 从API获取K线数据
+func (ms *MarketService) fetchKLineData(code string, period string, days int) ([]models.KLineData, error) {
 	scale := ms.periodToScale(period)
 	url := fmt.Sprintf(sinaKLineURL, code, scale, days)
 
@@ -557,73 +651,302 @@ func (ms *MarketService) GetMarketStatus() MarketStatus {
 	return result
 }
 
-// isTradeDay 判断是否为交易日
-func (ms *MarketService) isTradeDay(_ time.Time) (bool, string) {
-	log.Debug("开始判断是否为交易日")
-	isHoliday, note := ms.getTodayHolidayStatus()
-	log.Debug("getTodayHolidayStatus返回: isHoliday=%v, note=%s", isHoliday, note)
-	if isHoliday {
+// GetTradingSchedule 获取交易时间表（供前端判断市场状态）
+func (ms *MarketService) GetTradingSchedule() TradingSchedule {
+	now := time.Now()
+	loc := time.FixedZone("CST", 8*60*60)
+	now = now.In(loc)
+
+	isTradeDay, holidayName := ms.isTradeDay(now)
+
+	// A股交易时段配置
+	periods := []TradingPeriod{
+		{Status: "pre_market", Text: "盘前", StartTime: "00:00", EndTime: "09:15"},
+		{Status: "pre_market", Text: "集合竞价", StartTime: "09:15", EndTime: "09:30"},
+		{Status: "trading", Text: "交易中", StartTime: "09:30", EndTime: "11:30"},
+		{Status: "lunch_break", Text: "午间休市", StartTime: "11:30", EndTime: "13:00"},
+		{Status: "trading", Text: "交易中", StartTime: "13:00", EndTime: "15:00"},
+		{Status: "closed", Text: "已收盘", StartTime: "15:00", EndTime: "24:00"},
+	}
+
+	return TradingSchedule{
+		IsTradeDay:  isTradeDay,
+		HolidayName: holidayName,
+		Periods:     periods,
+	}
+}
+
+// isTradeDay 判断指定日期是否为交易日
+// A股交易日判定：非周末 且 非节假日（调休上班也不算交易日）
+func (ms *MarketService) isTradeDay(date time.Time) (bool, string) {
+	log.Debug("判断是否为交易日: %s", date.Format("2006-01-02"))
+
+	// 周末一律不是交易日
+	weekday := date.Weekday()
+	if weekday == time.Saturday || weekday == time.Sunday {
+		log.Debug("周末休息")
+		return false, "周末"
+	}
+
+	// 工作日：检查是否为节假日
+	isOffDay, inList, note := ms.getHolidayStatus(date)
+	if inList && isOffDay {
+		log.Debug("节假日休息: %s", note)
 		return false, note
 	}
+
 	return true, ""
 }
 
-// getTodayHolidayStatus 获取当天节假日状态（带缓存）
-func (ms *MarketService) getTodayHolidayStatus() (bool, string) {
-	log.Debug("检查缓存")
-	ms.todayCacheMu.RLock()
-	if ms.todayCache != nil && time.Since(ms.todayCache.timestamp) < time.Hour {
-		defer ms.todayCacheMu.RUnlock()
-		log.Debug("命中缓存: isHoliday=%v, note=%s", ms.todayCache.isHoliday, ms.todayCache.note)
-		return ms.todayCache.isHoliday, ms.todayCache.note
+// getHolidayStatus 获取指定日期的节假日状态
+// 返回: isOffDay=true表示休息日, inList=是否在节假日列表中, note为节假日名称
+func (ms *MarketService) getHolidayStatus(date time.Time) (isOffDay bool, inList bool, note string) {
+	dateStr := date.Format("2006-01-02")
+	year := date.Year()
+
+	// 加载该年份的节假日数据
+	yearData, err := ms.loadHolidayData(year)
+	if err != nil {
+		log.Warn("加载 %d 年节假日数据失败: %v", year, err)
+		return false, false, ""
 	}
-	ms.todayCacheMu.RUnlock()
 
-	// 缓存过期或不存在，重新获取
-	log.Debug("缓存未命中，调用API")
-	isHoliday, note := ms.fetchTodayHolidayStatus()
-	log.Debug("API返回: isHoliday=%v, note=%s", isHoliday, note)
-
-	ms.todayCacheMu.Lock()
-	ms.todayCache = &todayHolidayCache{
-		isHoliday: isHoliday,
-		note:      note,
-		timestamp: time.Now(),
+	// 查找该日期
+	if isOff, exists := yearData[dateStr]; exists {
+		noteName := ms.getHolidayNote(year, dateStr)
+		return isOff, true, noteName
 	}
-	ms.todayCacheMu.Unlock()
 
-	return isHoliday, note
+	// 不在节假日列表中
+	return false, false, ""
 }
 
-// fetchTodayHolidayStatus 从 API 获取当天节假日状态
-func (ms *MarketService) fetchTodayHolidayStatus() (bool, string) {
-	resp, err := ms.client.Get(holidayAPIURL)
+// getHolidayNote 获取节假日名称
+func (ms *MarketService) getHolidayNote(year int, dateStr string) string {
+	cacheFile := getHolidayCacheFile(year)
+	fileData, err := os.ReadFile(cacheFile)
 	if err != nil {
-		fmt.Println("[fetchTodayHolidayStatus] request error:", err)
-		return false, ""
+		return ""
+	}
+
+	var hd holidayData
+	if json.Unmarshal(fileData, &hd) != nil {
+		return ""
+	}
+
+	for _, day := range hd.Days {
+		if day.Date == dateStr {
+			return day.Name
+		}
+	}
+	return ""
+}
+
+// tradeDatesCache 交易日缓存文件结构
+type tradeDatesCache struct {
+	TradeDates []string  `json:"tradeDates"` // 交易日列表
+	UpdatedAt  time.Time `json:"updatedAt"`  // 更新时间
+}
+
+// holidayData 节假日数据结构
+type holidayData struct {
+	Year int          `json:"year"`
+	Days []holidayDay `json:"days"`
+}
+
+type holidayDay struct {
+	Name     string `json:"name"`
+	Date     string `json:"date"`
+	IsOffDay bool   `json:"isOffDay"`
+}
+
+// holidayCache 节假日缓存（按年份）
+var (
+	holidayCacheMu   sync.RWMutex
+	holidayCacheData = make(map[int]map[string]bool) // year -> date -> isOffDay
+)
+
+const holidayCDNURL = "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/%d.json"
+
+// getHolidayCacheFile 获取节假日缓存文件路径
+func getHolidayCacheFile(year int) string {
+	return filepath.Join(paths.EnsureCacheDir("holiday"), fmt.Sprintf("%d.json", year))
+}
+
+// loadHolidayData 加载指定年份的节假日数据
+func (ms *MarketService) loadHolidayData(year int) (map[string]bool, error) {
+	// 先检查内存缓存
+	holidayCacheMu.RLock()
+	if data, ok := holidayCacheData[year]; ok {
+		holidayCacheMu.RUnlock()
+		return data, nil
+	}
+	holidayCacheMu.RUnlock()
+
+	// 尝试从文件缓存加载
+	cacheFile := getHolidayCacheFile(year)
+	if fileData, err := os.ReadFile(cacheFile); err == nil {
+		var hd holidayData
+		if json.Unmarshal(fileData, &hd) == nil {
+			data := ms.parseHolidayData(&hd)
+			holidayCacheMu.Lock()
+			holidayCacheData[year] = data
+			holidayCacheMu.Unlock()
+			return data, nil
+		}
+	}
+
+	// 从CDN获取
+	return ms.fetchHolidayData(year)
+}
+
+// fetchHolidayData 从CDN获取节假日数据
+func (ms *MarketService) fetchHolidayData(year int) (map[string]bool, error) {
+	url := fmt.Sprintf(holidayCDNURL, year)
+	resp, err := ms.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("获取节假日数据失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("[fetchTodayHolidayStatus] read body error:", err)
-		return false, ""
+		return nil, err
 	}
 
-	// 解析 API 响应: {"date":"2026-02-04","isHoliday":false,"note":"普通工作日","type":"工作日"}
-	var apiResp struct {
-		Date      string `json:"date"`
-		IsHoliday bool   `json:"isHoliday"`
-		Note      string `json:"note"`
-		Type      string `json:"type"`
+	var hd holidayData
+	if err := json.Unmarshal(body, &hd); err != nil {
+		return nil, err
 	}
 
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		fmt.Println("[fetchTodayHolidayStatus] parse error:", err)
-		return false, ""
+	// 保存到文件缓存
+	cacheFile := getHolidayCacheFile(year)
+	os.WriteFile(cacheFile, body, 0644)
+
+	// 解析并缓存到内存
+	data := ms.parseHolidayData(&hd)
+	holidayCacheMu.Lock()
+	holidayCacheData[year] = data
+	holidayCacheMu.Unlock()
+
+	log.Info("加载 %d 年节假日数据，共 %d 条", year, len(hd.Days))
+	return data, nil
+}
+
+// parseHolidayData 解析节假日数据为 map
+func (ms *MarketService) parseHolidayData(hd *holidayData) map[string]bool {
+	data := make(map[string]bool)
+	for _, day := range hd.Days {
+		data[day.Date] = day.IsOffDay
+	}
+	return data
+}
+
+// isTradeDate 判断指定日期是否为交易日
+// A股交易日 = 非周末 且 非节假日（调休上班也不算交易日）
+func (ms *MarketService) isTradeDate(date time.Time) bool {
+	isTradeDay, _ := ms.isTradeDay(date)
+	return isTradeDay
+}
+
+// getTradeDatesCacheFile 获取交易日缓存文件路径
+func getTradeDatesCacheFile() string {
+	return filepath.Join(paths.EnsureCacheDir(""), "trade_dates.json")
+}
+
+// GetTradeDates 获取指定天数内的交易日列表（从今天往前推）
+func (ms *MarketService) GetTradeDates(days int) ([]string, error) {
+	// 先尝试从文件缓存加载
+	cached, err := ms.loadTradeDatesCache()
+	if err == nil && len(cached.TradeDates) > 0 {
+		// 检查缓存是否过期（每天更新一次）
+		if time.Since(cached.UpdatedAt) < 24*time.Hour {
+			log.Debug("使用交易日缓存，共 %d 天", len(cached.TradeDates))
+			return ms.filterTradeDates(cached.TradeDates, days), nil
+		}
 	}
 
-	return apiResp.IsHoliday, apiResp.Note
+	// 缓存不存在或过期，重新获取
+	log.Info("开始获取交易日列表")
+	tradeDates, err := ms.fetchTradeDates(90) // 获取90天的数据
+	if err != nil {
+		// 如果获取失败但有旧缓存，使用旧缓存
+		if cached != nil && len(cached.TradeDates) > 0 {
+			log.Warn("获取交易日失败，使用旧缓存: %v", err)
+			return ms.filterTradeDates(cached.TradeDates, days), nil
+		}
+		return nil, err
+	}
+
+	// 保存到文件缓存
+	if err := ms.saveTradeDatesCache(tradeDates); err != nil {
+		log.Warn("保存交易日缓存失败: %v", err)
+	}
+
+	return ms.filterTradeDates(tradeDates, days), nil
+}
+
+// filterTradeDates 过滤交易日列表，只返回指定天数
+func (ms *MarketService) filterTradeDates(dates []string, days int) []string {
+	if len(dates) <= days {
+		return dates
+	}
+	return dates[:days]
+}
+
+// loadTradeDatesCache 从文件加载交易日缓存
+func (ms *MarketService) loadTradeDatesCache() (*tradeDatesCache, error) {
+	data, err := os.ReadFile(getTradeDatesCacheFile())
+	if err != nil {
+		return nil, err
+	}
+	var cache tradeDatesCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
+// saveTradeDatesCache 保存交易日缓存到文件
+func (ms *MarketService) saveTradeDatesCache(dates []string) error {
+	cache := tradeDatesCache{
+		TradeDates: dates,
+		UpdatedAt:  time.Now(),
+	}
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(getTradeDatesCacheFile(), data, 0644)
+}
+
+// fetchTradeDates 获取交易日列表
+func (ms *MarketService) fetchTradeDates(days int) ([]string, error) {
+	var tradeDates []string
+	today := time.Now()
+
+	// 预加载需要的年份节假日数据
+	yearsNeeded := make(map[int]bool)
+	for i := 0; i < days; i++ {
+		yearsNeeded[today.AddDate(0, 0, -i).Year()] = true
+	}
+	for year := range yearsNeeded {
+		if _, err := ms.loadHolidayData(year); err != nil {
+			log.Warn("加载 %d 年节假日数据失败: %v", year, err)
+		}
+	}
+
+	for i := 0; i < days; i++ {
+		date := today.AddDate(0, 0, -i)
+		dateStr := date.Format("2006-01-02")
+
+		if ms.isTradeDate(date) {
+			tradeDates = append(tradeDates, dateStr)
+		}
+	}
+
+	log.Info("获取到 %d 个交易日", len(tradeDates))
+	return tradeDates, nil
 }
 
 // GetMarketIndices 获取大盘指数数据
@@ -657,8 +980,7 @@ func (ms *MarketService) GetMarketIndices() ([]models.MarketIndex, error) {
 // 字段: 名称,当前点位,涨跌点数,涨跌幅(%),成交量(手),成交额(万元)
 func (ms *MarketService) parseMarketIndices(data string) ([]models.MarketIndex, error) {
 	var indices []models.MarketIndex
-	re := regexp.MustCompile(`var hq_str_s_(\w+)="([^"]*)"`)
-	matches := re.FindAllStringSubmatch(data, -1)
+	matches := sinaIndexRegex.FindAllStringSubmatch(data, -1)
 
 	for _, match := range matches {
 		if len(match) < 3 || match[2] == "" {

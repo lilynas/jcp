@@ -15,6 +15,8 @@ export function AddStrategy(arg1:models.Strategy):Promise<string>;
 
 export function AddToWatchlist(arg1:models.Stock):Promise<string>;
 
+export function CancelInterruptedMeeting(arg1:string):Promise<boolean>;
+
 export function CancelMeeting(arg1:string):Promise<boolean>;
 
 export function CheckForUpdate():Promise<services.UpdateInfo>;
@@ -61,6 +63,8 @@ export function GetMCPServers():Promise<Array<models.MCPServerConfig>>;
 
 export function GetMCPStatus():Promise<Array<mcp.ServerStatus>>;
 
+export function GetOpenClawStatus():Promise<Record<string, any>>;
+
 export function GetOrCreateSession(arg1:string,arg2:string):Promise<models.StockSession>;
 
 export function GetOrderBook(arg1:string):Promise<models.OrderBook>;
@@ -73,15 +77,25 @@ export function GetStrategies():Promise<Array<models.Strategy>>;
 
 export function GetTelegraphList():Promise<Array<services.Telegraph>>;
 
+export function GetTradeDates(arg1:number):Promise<Array<string>>;
+
+export function GetTradingSchedule():Promise<services.TradingSchedule>;
+
 export function GetWatchlist():Promise<Array<models.Stock>>;
 
 export function Greet(arg1:string):Promise<string>;
+
+export function NotifyFrontendReady():Promise<void>;
 
 export function OpenURL(arg1:string):Promise<void>;
 
 export function RemoveFromWatchlist(arg1:string):Promise<string>;
 
 export function RestartApp():Promise<string>;
+
+export function RetryAgent(arg1:string,arg2:string,arg3:string):Promise<models.ChatMessage>;
+
+export function RetryAgentAndContinue(arg1:string):Promise<Array<models.ChatMessage>>;
 
 export function SearchStocks(arg1:string):Promise<Array<services.StockSearchResult>>;
 

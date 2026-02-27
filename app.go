@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync"
 
@@ -14,6 +13,8 @@ import (
 	"github.com/run-bigpig/jcp/internal/meeting"
 	"github.com/run-bigpig/jcp/internal/memory"
 	"github.com/run-bigpig/jcp/internal/models"
+	"github.com/run-bigpig/jcp/internal/openclaw"
+	"github.com/run-bigpig/jcp/internal/pkg/paths"
 	"github.com/run-bigpig/jcp/internal/pkg/proxy"
 	"github.com/run-bigpig/jcp/internal/services"
 	"github.com/run-bigpig/jcp/internal/services/hottrend"
@@ -25,21 +26,22 @@ var log = logger.New("app")
 
 // App struct
 type App struct {
-	ctx                context.Context
-	configService      *services.ConfigService
-	marketService      *services.MarketService
-	newsService        *services.NewsService
-	hotTrendService    *hottrend.HotTrendService
-	longHuBangService  *services.LongHuBangService
-	marketPusher       *services.MarketDataPusher
-	meetingService     *meeting.Service
-	sessionService     *services.SessionService
-	strategyService    *services.StrategyService
-	agentContainer     *agent.Container
-	toolRegistry       *tools.Registry
-	mcpManager         *mcp.Manager
-	memoryManager      *memory.Manager
-	updateService      *services.UpdateService
+	ctx               context.Context
+	configService     *services.ConfigService
+	marketService     *services.MarketService
+	newsService       *services.NewsService
+	hotTrendService   *hottrend.HotTrendService
+	longHuBangService *services.LongHuBangService
+	marketPusher      *services.MarketDataPusher
+	meetingService    *meeting.Service
+	sessionService    *services.SessionService
+	strategyService   *services.StrategyService
+	agentContainer    *agent.Container
+	toolRegistry      *tools.Registry
+	mcpManager        *mcp.Manager
+	memoryManager     *memory.Manager
+	updateService     *services.UpdateService
+	openClawServer    *openclaw.Server
 
 	// 会议取消管理
 	meetingCancels   map[string]context.CancelFunc
@@ -48,13 +50,13 @@ type App struct {
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	dataDir := getDataDir()
+	dataDir := paths.GetDataDir()
 
 	// 初始化文件日志
 	if err := logger.InitFileLogger(filepath.Join(dataDir, "logs")); err != nil {
 		log.Error("初始化文件日志失败: %v", err)
 	}
-	logger.SetGlobalLevel(logger.DEBUG)
+	logger.SetGlobalLevel(logger.INFO)
 
 	// 初始化配置服务
 	configService, err := services.NewConfigService(dataDir)
@@ -137,32 +139,48 @@ func NewApp() *App {
 	// 初始化更新服务
 	updateService := services.NewUpdateService("run-bigpig", "jcp", Version)
 
+	// 初始化 OpenClaw 服务
+	openClawServer := openclaw.NewServer(meetingService, agentContainer, func(aiConfigID string) *models.AIConfig {
+		cfg := configService.GetConfig()
+		if aiConfigID == "" {
+			aiConfigID = cfg.DefaultAIID
+		}
+		for i := range cfg.AIConfigs {
+			if cfg.AIConfigs[i].ID == aiConfigID {
+				return &cfg.AIConfigs[i]
+			}
+		}
+		return nil
+	}, func(code string) (*models.Stock, error) {
+		stocks, err := marketService.GetStockRealTimeData(code)
+		if err != nil {
+			return nil, err
+		}
+		if len(stocks) == 0 {
+			return nil, nil
+		}
+		return &stocks[0], nil
+	})
+
 	log.Info("所有服务初始化完成")
 
 	return &App{
-		configService:      configService,
-		marketService:      marketService,
-		newsService:        newsService,
-		hotTrendService:    hotTrendSvc,
-		longHuBangService:  longHuBangService,
-		meetingService:     meetingService,
-		sessionService:     sessionService,
-		strategyService:    strategyService,
-		agentContainer:     agentContainer,
-		toolRegistry:       toolRegistry,
-		mcpManager:         mcpManager,
-		memoryManager:      memoryManager,
-		updateService:      updateService,
-		meetingCancels:     make(map[string]context.CancelFunc),
+		configService:     configService,
+		marketService:     marketService,
+		newsService:       newsService,
+		hotTrendService:   hotTrendSvc,
+		longHuBangService: longHuBangService,
+		meetingService:    meetingService,
+		sessionService:    sessionService,
+		strategyService:   strategyService,
+		agentContainer:    agentContainer,
+		toolRegistry:      toolRegistry,
+		mcpManager:        mcpManager,
+		memoryManager:     memoryManager,
+		updateService:     updateService,
+		openClawServer:    openClawServer,
+		meetingCancels:    make(map[string]context.CancelFunc),
 	}
-}
-
-func getDataDir() string {
-	userConfigDir, err := os.UserConfigDir()
-	if err != nil || userConfigDir == "" {
-		return filepath.Join(".", "data")
-	}
-	return filepath.Join(userConfigDir, "jcp")
 }
 
 // startup is called when the app starts. The context is saved
@@ -194,11 +212,22 @@ func (a *App) startup(ctx context.Context) {
 	a.marketPusher = services.NewMarketDataPusher(a.marketService, a.configService, a.newsService)
 	a.marketPusher.Start(ctx)
 	log.Info("市场数据推送服务已启动")
+
+	// 启动 OpenClaw 服务（如果已启用）
+	cfg := a.configService.GetConfig()
+	if cfg.OpenClaw.Enabled && cfg.OpenClaw.Port > 0 {
+		if err := a.openClawServer.Start(cfg.OpenClaw.Port, cfg.OpenClaw.APIKey); err != nil {
+			log.Warn("OpenClaw 启动失败: %v", err)
+		}
+	}
 }
 
 // shutdown 应用关闭时调用
 func (a *App) shutdown(ctx context.Context) {
 	log.Info("应用正在关闭...")
+	if a.openClawServer != nil {
+		a.openClawServer.Stop()
+	}
 	if a.marketPusher != nil {
 		a.marketPusher.Stop()
 	}
@@ -246,7 +275,42 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 			}
 		}
 	}
+	// 更新 OpenClaw 服务配置（热更新）
+	a.applyOpenClawConfig(&config.OpenClaw)
 	return "success"
+}
+
+// applyOpenClawConfig 应用 OpenClaw 配置变更
+func (a *App) applyOpenClawConfig(cfg *models.OpenClawConfig) {
+	if a.openClawServer == nil {
+		return
+	}
+	if !cfg.Enabled {
+		a.openClawServer.Stop()
+		return
+	}
+	if cfg.Port <= 0 {
+		return
+	}
+	// 端口或密钥变更时重启
+	if a.openClawServer.IsRunning() {
+		if a.openClawServer.GetPort() != cfg.Port {
+			a.openClawServer.Restart(cfg.Port, cfg.APIKey)
+		}
+	} else {
+		a.openClawServer.Start(cfg.Port, cfg.APIKey)
+	}
+}
+
+// GetOpenClawStatus 获取 OpenClaw 服务状态
+func (a *App) GetOpenClawStatus() map[string]any {
+	if a.openClawServer == nil {
+		return map[string]any{"running": false}
+	}
+	return map[string]any{
+		"running": a.openClawServer.IsRunning(),
+		"port":    a.openClawServer.GetPort(),
+	}
 }
 
 // GetWatchlist 获取自选股列表
@@ -494,10 +558,10 @@ type GenerateStrategyRequest struct {
 
 // GenerateStrategyResponse AI生成策略响应
 type GenerateStrategyResponse struct {
-	Success   bool             `json:"success"`
-	Error     string           `json:"error,omitempty"`
-	Strategy  models.Strategy  `json:"strategy,omitempty"`
-	Reasoning string           `json:"reasoning,omitempty"`
+	Success   bool            `json:"success"`
+	Error     string          `json:"error,omitempty"`
+	Strategy  models.Strategy `json:"strategy,omitempty"`
+	Reasoning string          `json:"reasoning,omitempty"`
 }
 
 // GenerateStrategy AI生成策略
@@ -736,6 +800,7 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock models.Stock, query string, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
 	allAgents := a.strategyService.GetEnabledAgents()
 	chatReq := meeting.ChatRequest{
+		StockCode: stockCode,
 		Stock:     stock,
 		Query:     query,
 		AllAgents: allAgents,
@@ -745,12 +810,14 @@ func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock model
 	// 响应回调：每次发言完成后推送
 	respCallback := func(resp meeting.ChatResponse) {
 		msg := models.ChatMessage{
-			AgentID:   resp.AgentID,
-			AgentName: resp.AgentName,
-			Role:      resp.Role,
-			Content:   resp.Content,
-			Round:     resp.Round,
-			MsgType:   resp.MsgType,
+			AgentID:     resp.AgentID,
+			AgentName:   resp.AgentName,
+			Role:        resp.Role,
+			Content:     resp.Content,
+			Round:       resp.Round,
+			MsgType:     resp.MsgType,
+			Error:       resp.Error,
+			MeetingMode: resp.MeetingMode,
 		}
 		a.sessionService.AddMessage(stockCode, msg)
 		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
@@ -771,12 +838,14 @@ func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock model
 	var messages []models.ChatMessage
 	for _, resp := range responses {
 		messages = append(messages, models.ChatMessage{
-			AgentID:   resp.AgentID,
-			AgentName: resp.AgentName,
-			Role:      resp.Role,
-			Content:   resp.Content,
-			Round:     resp.Round,
-			MsgType:   resp.MsgType,
+			AgentID:     resp.AgentID,
+			AgentName:   resp.AgentName,
+			Role:        resp.Role,
+			Content:     resp.Content,
+			Round:       resp.Round,
+			MsgType:     resp.MsgType,
+			Error:       resp.Error,
+			MeetingMode: resp.MeetingMode,
 		})
 	}
 	return messages
@@ -812,13 +881,15 @@ func (a *App) convertSaveAndEmitResponses(stockCode string, responses []meeting.
 	var messages []models.ChatMessage
 	for _, resp := range responses {
 		msg := models.ChatMessage{
-			AgentID:   resp.AgentID,
-			AgentName: resp.AgentName,
-			Role:      resp.Role,
-			Content:   resp.Content,
-			ReplyTo:   replyTo,
-			Round:     resp.Round,
-			MsgType:   resp.MsgType,
+			AgentID:     resp.AgentID,
+			AgentName:   resp.AgentName,
+			Role:        resp.Role,
+			Content:     resp.Content,
+			ReplyTo:     replyTo,
+			Round:       resp.Round,
+			MsgType:     resp.MsgType,
+			Error:       resp.Error,
+			MeetingMode: resp.MeetingMode,
 		}
 		// 保存单条消息
 		a.sessionService.AddMessage(stockCode, msg)
@@ -827,6 +898,131 @@ func (a *App) convertSaveAndEmitResponses(stockCode string, responses []meeting.
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+// RetryAgent 重试单个失败的专家（前端手动触发）
+func (a *App) RetryAgent(stockCode string, agentId string, query string) models.ChatMessage {
+	// 获取股票数据
+	stocks, _ := a.marketService.GetStockRealTimeData(stockCode)
+	var stock models.Stock
+	if len(stocks) > 0 {
+		stock = stocks[0]
+	}
+
+	// 获取 AI 配置
+	config := a.configService.GetConfig()
+	aiConfig := a.getDefaultAIConfig(config)
+	if aiConfig == nil {
+		log.Warn("RetryAgent: no AI config")
+		return models.ChatMessage{AgentID: agentId, Error: "未配置 AI 服务"}
+	}
+
+	// 获取专家配置
+	agents := a.strategyService.GetAgentsByIDs([]string{agentId})
+	if len(agents) == 0 {
+		log.Warn("RetryAgent: agent not found: %s", agentId)
+		return models.ChatMessage{AgentID: agentId, Error: "专家不存在"}
+	}
+	agentCfg := agents[0]
+
+	position := a.sessionService.GetPosition(stockCode)
+
+	// 进度回调
+	progressCallback := func(event meeting.ProgressEvent) {
+		runtime.EventsEmit(a.ctx, "meeting:progress:"+stockCode, event)
+	}
+
+	resp, err := a.meetingService.RetrySingleAgent(a.ctx, aiConfig, &agentCfg, &stock, query, progressCallback, position)
+
+	msg := models.ChatMessage{
+		AgentID:     resp.AgentID,
+		AgentName:   resp.AgentName,
+		Role:        resp.Role,
+		Content:     resp.Content,
+		Round:       resp.Round,
+		MsgType:     resp.MsgType,
+		Error:       resp.Error,
+		MeetingMode: resp.MeetingMode,
+	}
+
+	if err != nil {
+		log.Error("RetryAgent failed: %v", err)
+		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+		return msg
+	}
+
+	// 成功：保存并推送
+	a.sessionService.AddMessage(stockCode, msg)
+	runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+	return msg
+}
+
+// RetryAgentAndContinue 重试失败专家并继续执行剩余专家（前端手动触发）
+func (a *App) RetryAgentAndContinue(stockCode string) []models.ChatMessage {
+	if !a.meetingService.HasInterruptedMeeting(stockCode) {
+		log.Warn("RetryAgentAndContinue: no interrupted meeting for %s", stockCode)
+		return []models.ChatMessage{}
+	}
+
+	// 创建可取消的 context
+	meetingCtx, cancel := context.WithCancel(a.ctx)
+	a.meetingCancelsMu.Lock()
+	a.meetingCancels[stockCode] = cancel
+	a.meetingCancelsMu.Unlock()
+
+	defer func() {
+		a.meetingCancelsMu.Lock()
+		delete(a.meetingCancels, stockCode)
+		a.meetingCancelsMu.Unlock()
+	}()
+
+	// 响应回调
+	respCallback := func(resp meeting.ChatResponse) {
+		msg := models.ChatMessage{
+			AgentID:     resp.AgentID,
+			AgentName:   resp.AgentName,
+			Role:        resp.Role,
+			Content:     resp.Content,
+			Round:       resp.Round,
+			MsgType:     resp.MsgType,
+			Error:       resp.Error,
+			MeetingMode: resp.MeetingMode,
+		}
+		a.sessionService.AddMessage(stockCode, msg)
+		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+	}
+
+	// 进度回调
+	progressCallback := func(event meeting.ProgressEvent) {
+		runtime.EventsEmit(a.ctx, "meeting:progress:"+stockCode, event)
+	}
+
+	responses, err := a.meetingService.ContinueMeeting(meetingCtx, stockCode, respCallback, progressCallback)
+	if err != nil {
+		log.Error("RetryAgentAndContinue error: %v", err)
+		return []models.ChatMessage{}
+	}
+
+	var messages []models.ChatMessage
+	for _, resp := range responses {
+		messages = append(messages, models.ChatMessage{
+			AgentID:     resp.AgentID,
+			AgentName:   resp.AgentName,
+			Role:        resp.Role,
+			Content:     resp.Content,
+			Round:       resp.Round,
+			MsgType:     resp.MsgType,
+			Error:       resp.Error,
+			MeetingMode: resp.MeetingMode,
+		})
+	}
+	return messages
+}
+
+// CancelInterruptedMeeting 取消中断的会议（用户放弃重试）
+func (a *App) CancelInterruptedMeeting(stockCode string) bool {
+	a.meetingService.CancelInterruptedMeeting(stockCode)
+	return true
 }
 
 // ========== News API ==========
@@ -925,13 +1121,35 @@ func (a *App) TestMCPConnection(serverID string) *mcp.ServerStatus {
 }
 
 // TestAIConnection 测试 AI 配置连通性
+// 连接成功后自动检测是否支持 system role，并持久化结果
 func (a *App) TestAIConnection(config models.AIConfig) string {
 	factory := adk.NewModelFactory()
-	if err := factory.TestConnection(context.Background(), &config); err != nil {
+	ctx := context.Background()
+	if err := factory.TestConnection(ctx, &config); err != nil {
 		log.Error("AI 连接测试失败 [%s]: %v", config.Name, err)
 		return err.Error()
 	}
 	log.Info("AI 连接测试成功 [%s]", config.Name)
+
+	// 连接成功后，探测是否支持 system role
+	noSystemRole := factory.DetectSystemRoleSupport(ctx, &config)
+	config.NoSystemRole = noSystemRole
+
+	// 持久化检测结果到配置
+	if appConfig := a.configService.GetConfig(); appConfig != nil {
+		for i := range appConfig.AIConfigs {
+			if appConfig.AIConfigs[i].ID == config.ID {
+				appConfig.AIConfigs[i].NoSystemRole = noSystemRole
+				if err := a.configService.UpdateConfig(appConfig); err != nil {
+					log.Warn("保存 NoSystemRole 检测结果失败: %v", err)
+				} else {
+					log.Info("模型 [%s] NoSystemRole=%v 已保存", config.Name, noSystemRole)
+				}
+				break
+			}
+		}
+	}
+
 	return "success"
 }
 
@@ -1024,6 +1242,27 @@ func (a *App) GetCurrentVersion() string {
 	return a.updateService.GetCurrentVersion()
 }
 
+// GetTradeDates 获取交易日列表
+func (a *App) GetTradeDates(days int) []string {
+	if a.marketService == nil {
+		return nil
+	}
+	dates, err := a.marketService.GetTradeDates(days)
+	if err != nil {
+		return nil
+	}
+	return dates
+}
+
+// GetTradingSchedule 获取交易时间表
+func (a *App) GetTradingSchedule() *services.TradingSchedule {
+	if a.marketService == nil {
+		return nil
+	}
+	schedule := a.marketService.GetTradingSchedule()
+	return &schedule
+}
+
 // GetLongHuBangList 获取龙虎榜列表
 func (a *App) GetLongHuBangList(pageSize, pageNumber int, tradeDate string) *services.LongHuBangListResult {
 	if a.longHuBangService == nil {
@@ -1048,4 +1287,11 @@ func (a *App) GetLongHuBangDetail(code, tradeDate string) []models.LongHuBangDet
 		return nil
 	}
 	return details
+}
+
+// NotifyFrontendReady 前端通知已准备好，开始推送数据
+func (a *App) NotifyFrontendReady() {
+	if a.marketPusher != nil {
+		a.marketPusher.SetReady()
+	}
 }

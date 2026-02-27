@@ -3,14 +3,175 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/sashabaranov/go-openai"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
+
+	"github.com/run-bigpig/jcp/internal/logger"
 )
 
+var convertLog = logger.New("openai:convert")
+
+// 匹配第三方特殊工具调用格式
+// 格式1: <vendor:tool_call> <invoke name="xxx"> <parameter name="yyy">zzz</parameter> </invoke> </vendor:tool_call>
+var vendorToolCallStartRegex = regexp.MustCompile(`<(\w+):tool_call>`)
+var invokeRegex = regexp.MustCompile(`(?s)<invoke\s+name="([^"]+)">\s*(.*?)\s*</invoke>`)
+var paramRegex = regexp.MustCompile(`(?s)<parameter\s+name="([^"]+)">(.*?)</parameter>`)
+
+// 格式2: <tool_call_begin>tool_name <param name="xxx">yyy</param> </tool_call_end>
+var toolCallBeginRegex = regexp.MustCompile(`(?s)<tool_call_begin>\s*(\w+)\s*(.*?)\s*</tool_call_end>`)
+var paramAltRegex = regexp.MustCompile(`(?s)<param\s+name="([^"]+)">(.*?)</param>`)
+
+// 格式3: <tool_call> <tool name="xxx"> <param name="yyy">zzz</param> </tool> </tool_call>
+var toolCallWrapRegex = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
+var toolTagRegex = regexp.MustCompile(`(?s)<tool\s+name="([^"]+)">\s*(.*?)\s*</tool>`)
+
+// VendorToolCall 第三方工具调用解析结果
+type VendorToolCall struct {
+	Name string
+	Args map[string]any
+}
+
+// FilterVendorToolCallMarkers 过滤文本中的第三方工具调用标记（导出供外部使用）
+func FilterVendorToolCallMarkers(text string) string {
+	_, cleaned := parseVendorToolCalls(text)
+	return cleaned
+}
+
+// parseVendorToolCalls 解析文本中的第三方工具调用标记
+// 返回解析出的工具调用列表和清理后的文本
+func parseVendorToolCalls(text string) ([]VendorToolCall, string) {
+	if text == "" {
+		return nil, text
+	}
+
+	var toolCalls []VendorToolCall
+	cleanedText := text
+
+	// 查找所有 vendor:tool_call 开始标签
+	startMatches := vendorToolCallStartRegex.FindAllStringSubmatchIndex(text, -1)
+	for _, match := range startMatches {
+		if len(match) < 4 {
+			continue
+		}
+		// match[0]:match[1] 是整个匹配，match[2]:match[3] 是 vendor 名称
+		vendor := text[match[2]:match[3]]
+		startPos := match[0]
+		endTag := "</" + vendor + ":tool_call>"
+
+		// 查找对应的结束标签
+		endPos := strings.Index(text[match[1]:], endTag)
+		if endPos == -1 {
+			continue
+		}
+		endPos += match[1]
+
+		// 提取内部内容
+		innerContent := text[match[1]:endPos]
+		fullMatch := text[startPos : endPos+len(endTag)]
+
+		// 解析 invoke 标签
+		invokeMatches := invokeRegex.FindAllStringSubmatch(innerContent, -1)
+		for _, invokeMatch := range invokeMatches {
+			if len(invokeMatch) < 3 {
+				continue
+			}
+			toolName := invokeMatch[1]
+			paramsContent := invokeMatch[2]
+
+			// 解析参数
+			args := make(map[string]any)
+			paramMatches := paramRegex.FindAllStringSubmatch(paramsContent, -1)
+			for _, paramMatch := range paramMatches {
+				if len(paramMatch) >= 3 {
+					args[paramMatch[1]] = paramMatch[2]
+				}
+			}
+
+			toolCalls = append(toolCalls, VendorToolCall{
+				Name: toolName,
+				Args: args,
+			})
+		}
+
+		// 从文本中移除已解析的工具调用块
+		cleanedText = strings.Replace(cleanedText, fullMatch, "", 1)
+	}
+
+	// 格式2: <tool_call_begin>tool_name <param name="xxx">yyy</param> </tool_call_end>
+	beginMatches := toolCallBeginRegex.FindAllStringSubmatch(cleanedText, -1)
+	for _, match := range beginMatches {
+		if len(match) < 3 {
+			continue
+		}
+		toolName := match[1]
+		paramsContent := match[2]
+
+		// 解析参数
+		args := make(map[string]any)
+		paramMatches := paramAltRegex.FindAllStringSubmatch(paramsContent, -1)
+		for _, paramMatch := range paramMatches {
+			if len(paramMatch) >= 3 {
+				// 去除参数值两端的引号
+				val := strings.Trim(paramMatch[2], "\"")
+				args[paramMatch[1]] = val
+			}
+		}
+
+		toolCalls = append(toolCalls, VendorToolCall{
+			Name: toolName,
+			Args: args,
+		})
+
+		// 从文本中移除已解析的工具调用块
+		cleanedText = strings.Replace(cleanedText, match[0], "", 1)
+	}
+
+	// 格式3: <tool_call> <tool name="xxx"> <param name="yyy">zzz</param> </tool> </tool_call>
+	wrapMatches := toolCallWrapRegex.FindAllStringSubmatch(cleanedText, -1)
+	for _, match := range wrapMatches {
+		if len(match) < 2 {
+			continue
+		}
+		innerContent := match[1]
+
+		// 解析多个 tool 标签
+		toolMatches := toolTagRegex.FindAllStringSubmatch(innerContent, -1)
+		for _, toolMatch := range toolMatches {
+			if len(toolMatch) < 3 {
+				continue
+			}
+			toolName := toolMatch[1]
+			paramsContent := toolMatch[2]
+
+			// 解析参数
+			args := make(map[string]any)
+			paramMatches := paramAltRegex.FindAllStringSubmatch(paramsContent, -1)
+			for _, paramMatch := range paramMatches {
+				if len(paramMatch) >= 3 {
+					val := strings.Trim(paramMatch[2], "\"")
+					args[paramMatch[1]] = val
+				}
+			}
+
+			toolCalls = append(toolCalls, VendorToolCall{
+				Name: toolName,
+				Args: args,
+			})
+		}
+
+		// 从文本中移除已解析的工具调用块
+		cleanedText = strings.Replace(cleanedText, match[0], "", 1)
+	}
+
+	return toolCalls, strings.TrimSpace(cleanedText)
+}
+
 // toOpenAIChatCompletionRequest 将 ADK 请求转换为 OpenAI 请求
-func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string, sendParams bool) (openai.ChatCompletionRequest, error) {
+func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string, sendParams bool, noSystemRole bool) (openai.ChatCompletionRequest, error) {
 	openaiMessages := make([]openai.ChatCompletionMessage, 0, len(req.Contents))
 	for _, content := range req.Contents {
 		msgs, err := toOpenAIChatCompletionMessage(content)
@@ -66,11 +227,32 @@ func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string, send
 
 		// 处理系统指令
 		if req.Config.SystemInstruction != nil {
-			systemMsg := openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: extractTextFromContent(req.Config.SystemInstruction),
+			systemText := extractTextFromContent(req.Config.SystemInstruction)
+			if noSystemRole {
+				// 不支持 system role，将系统指令注入到第一条 user 消息前面
+				injected := false
+				for i, msg := range openaiMessages {
+					if msg.Role == openai.ChatMessageRoleUser {
+						openaiMessages[i].Content = systemText + "\n\n" + msg.Content
+						injected = true
+						break
+					}
+				}
+				if !injected {
+					// 没有 user 消息，作为独立 user 消息插入
+					userMsg := openai.ChatCompletionMessage{
+						Role:    openai.ChatMessageRoleUser,
+						Content: systemText,
+					}
+					openaiMessages = append([]openai.ChatCompletionMessage{userMsg}, openaiMessages...)
+				}
+			} else {
+				systemMsg := openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: systemText,
+				}
+				openaiMessages = append([]openai.ChatCompletionMessage{systemMsg}, openaiMessages...)
 			}
-			openaiMessages = append([]openai.ChatCompletionMessage{systemMsg}, openaiMessages...)
 			openaiReq.Messages = openaiMessages
 		}
 
@@ -255,12 +437,26 @@ func convertChatCompletionResponse(resp *openai.ChatCompletionResponse) (*model.
 		})
 	}
 
-	// 处理普通内容
+	// 处理普通内容，解析第三方特殊工具调用标记
 	if choice.Message.Content != "" {
-		content.Parts = append(content.Parts, &genai.Part{Text: choice.Message.Content})
+		vendorCalls, cleanedText := parseVendorToolCalls(choice.Message.Content)
+		// 添加清理后的文本
+		if cleanedText != "" {
+			content.Parts = append(content.Parts, &genai.Part{Text: cleanedText})
+		}
+		// 将第三方工具调用转换为 FunctionCall
+		for i, vc := range vendorCalls {
+			content.Parts = append(content.Parts, &genai.Part{
+				FunctionCall: &genai.FunctionCall{
+					ID:   fmt.Sprintf("vendor_call_%d", i),
+					Name: vc.Name,
+					Args: vc.Args,
+				},
+			})
+		}
 	}
 
-	// 处理工具调用
+	// 处理标准 OpenAI 工具调用
 	for _, toolCall := range choice.Message.ToolCalls {
 		if toolCall.Type == openai.ToolTypeFunction {
 			content.Parts = append(content.Parts, &genai.Part{
@@ -314,6 +510,7 @@ func parseJSONArgs(argsJSON string) map[string]any {
 	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		convertLog.Warn("解析工具调用参数失败: %v, 原始内容: %s", err, argsJSON)
 		return make(map[string]any)
 	}
 	return args

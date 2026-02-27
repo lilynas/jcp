@@ -141,7 +141,7 @@ func (f *ModelFactory) createOpenAIModel(config *models.AIConfig) (model.LLM, er
 		Transport: proxy.GetManager().GetTransport(),
 	}
 
-	return openai.NewOpenAIModel(config.ModelName, openaiCfg, config.SendParams), nil
+	return openai.NewOpenAIModel(config.ModelName, openaiCfg, config.SendParams, config.NoSystemRole), nil
 }
 
 // createOpenAIResponsesModel 创建使用 Responses API 的 OpenAI 模型
@@ -152,7 +152,7 @@ func (f *ModelFactory) createOpenAIResponsesModel(config *models.AIConfig) (mode
 	httpClient := &http.Client{
 		Transport: proxy.GetManager().GetTransport(),
 	}
-	return openai.NewResponsesModel(config.ModelName, config.APIKey, baseURL, httpClient), nil
+	return openai.NewResponsesModel(config.ModelName, config.APIKey, baseURL, httpClient, config.NoSystemRole), nil
 }
 
 // TestConnection 测试 AI 配置的连通性
@@ -173,23 +173,109 @@ func (f *ModelFactory) TestConnection(ctx context.Context, config *models.AIConf
 	}
 }
 
+// systemRoleProbeKeyword 探测暗号，不可能在正常对话中自然出现
+const systemRoleProbeKeyword = "SYS_PROBE_7X3K"
+
+// DetectSystemRoleSupport 检测 OpenAI 兼容接口是否支持 system role
+// 通过系统指令要求模型回复特定暗号，检查响应中是否包含该暗号
+// 返回 true 表示不支持（需要降级）
+func (f *ModelFactory) DetectSystemRoleSupport(ctx context.Context, config *models.AIConfig) bool {
+	if config.Provider != models.AIProviderOpenAI {
+		return false // Gemini/VertexAI 原生支持
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	baseURL := normalizeOpenAIBaseURL(config.BaseURL)
+	transport := proxy.GetManager().GetTransport()
+
+	systemPrompt := fmt.Sprintf(
+		"You must reply with exactly: %s. Do not add anything else.",
+		systemRoleProbeKeyword,
+	)
+
+	var body map[string]any
+	var endpoint string
+
+	if config.UseResponses {
+		endpoint = strings.TrimSuffix(baseURL, "/") + "/responses"
+		body = map[string]any{
+			"model":             config.ModelName,
+			"max_output_tokens": 30,
+			"input":             "Please follow the system instruction.",
+			"instructions":      systemPrompt,
+		}
+	} else {
+		endpoint = strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+		body = map[string]any{
+			"model":      config.ModelName,
+			"max_tokens": 30,
+			"messages": []map[string]string{
+				{"role": "system", "content": systemPrompt},
+				{"role": "user", "content": "Please follow the system instruction."},
+			},
+		}
+	}
+
+	respBody, statusCode, err := f.doProbeRequest(ctx, endpoint, config.APIKey, transport, body)
+	if err != nil {
+		log.Warn("模型 [%s] system role 探测请求失败: %v", config.ModelName, err)
+		return false // 请求失败时保守处理，不降级
+	}
+
+	// HTTP 非 200，接口本身不支持 system role
+	if statusCode != http.StatusOK {
+		log.Warn("模型 [%s] 不支持 system role (HTTP %d): %s",
+			config.ModelName, statusCode, string(respBody))
+		return true
+	}
+
+	// 从响应中提取文本内容，检查是否包含暗号
+	replyText := f.extractReplyText(respBody, config.UseResponses)
+	if strings.Contains(replyText, systemRoleProbeKeyword) {
+		log.Info("模型 [%s] 支持 system role（暗号匹配）", config.ModelName)
+		return false
+	}
+
+	log.Warn("模型 [%s] 不遵循 system role 指令（回复: %s）",
+		config.ModelName, replyText)
+	return true
+}
+
 // testOpenAIConnection 测试 OpenAI 兼容接口连通性
+// 根据 UseResponses 配置决定使用 Responses API 或 Chat Completions API
 func (f *ModelFactory) testOpenAIConnection(ctx context.Context, config *models.AIConfig) error {
 	baseURL := normalizeOpenAIBaseURL(config.BaseURL)
 	transport := proxy.GetManager().GetTransport()
 
-	// 构造最小的 chat completion 请求
-	body := map[string]interface{}{
-		"model":    config.ModelName,
-		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	var body map[string]interface{}
+	var endpoint string
+
+	if config.UseResponses {
+		// 使用 Responses API 端点测试
+		endpoint = strings.TrimSuffix(baseURL, "/") + "/responses"
+		body = map[string]interface{}{
+			"model":             config.ModelName,
+			"max_output_tokens": 1,
+			"input":             "hi",
+		}
+	} else {
+		// 使用 Chat Completions API 端点测试
+		endpoint = strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+		body = map[string]interface{}{
+			"model":      config.ModelName,
+			"max_tokens": 1,
+			"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		}
 	}
+
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("请求构造失败: %w", err)
 	}
 
-	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(jsonBody)))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return fmt.Errorf("请求创建失败: %w", err)
 	}
@@ -249,4 +335,66 @@ func (f *ModelFactory) testViaGenerate(ctx context.Context, llm model.LLM) error
 		return nil
 	}
 	return nil
+}
+
+// doProbeRequest 发送探测请求，返回响应体、状态码
+func (f *ModelFactory) doProbeRequest(ctx context.Context, endpoint, apiKey string, transport http.RoundTripper, body map[string]any) ([]byte, int, error) {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("请求构造失败: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return nil, 0, fmt.Errorf("请求创建失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Transport: transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("连接失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	return respBody, resp.StatusCode, nil
+}
+
+// extractReplyText 从 API 响应 JSON 中提取模型回复文本
+func (f *ModelFactory) extractReplyText(respBody []byte, useResponses bool) string {
+	if useResponses {
+		return f.extractResponsesReplyText(respBody)
+	}
+	return f.extractChatCompletionReplyText(respBody)
+}
+
+// extractChatCompletionReplyText 从 Chat Completions 响应中提取文本
+func (f *ModelFactory) extractChatCompletionReplyText(respBody []byte) string {
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return ""
+	}
+	if len(resp.Choices) == 0 {
+		return ""
+	}
+	return resp.Choices[0].Message.Content
+}
+
+// extractResponsesReplyText 从 Responses API 响应中提取文本
+func (f *ModelFactory) extractResponsesReplyText(respBody []byte) string {
+	var resp struct {
+		OutputText string `json:"output_text"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return ""
+	}
+	return resp.OutputText
 }

@@ -18,6 +18,10 @@ export function AddToWatchlist(arg1) {
   return window['go']['main']['App']['AddToWatchlist'](arg1);
 }
 
+export function CancelInterruptedMeeting(arg1) {
+  return window['go']['main']['App']['CancelInterruptedMeeting'](arg1);
+}
+
 export function CancelMeeting(arg1) {
   return window['go']['main']['App']['CancelMeeting'](arg1);
 }
@@ -110,6 +114,10 @@ export function GetMCPStatus() {
   return window['go']['main']['App']['GetMCPStatus']();
 }
 
+export function GetOpenClawStatus() {
+  return window['go']['main']['App']['GetOpenClawStatus']();
+}
+
 export function GetOrCreateSession(arg1, arg2) {
   return window['go']['main']['App']['GetOrCreateSession'](arg1, arg2);
 }
@@ -134,12 +142,24 @@ export function GetTelegraphList() {
   return window['go']['main']['App']['GetTelegraphList']();
 }
 
+export function GetTradeDates(arg1) {
+  return window['go']['main']['App']['GetTradeDates'](arg1);
+}
+
+export function GetTradingSchedule() {
+  return window['go']['main']['App']['GetTradingSchedule']();
+}
+
 export function GetWatchlist() {
   return window['go']['main']['App']['GetWatchlist']();
 }
 
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
+}
+
+export function NotifyFrontendReady() {
+  return window['go']['main']['App']['NotifyFrontendReady']();
 }
 
 export function OpenURL(arg1) {
@@ -152,6 +172,14 @@ export function RemoveFromWatchlist(arg1) {
 
 export function RestartApp() {
   return window['go']['main']['App']['RestartApp']();
+}
+
+export function RetryAgent(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RetryAgent'](arg1, arg2, arg3);
+}
+
+export function RetryAgentAndContinue(arg1) {
+  return window['go']['main']['App']['RetryAgentAndContinue'](arg1);
 }
 
 export function SearchStocks(arg1) {

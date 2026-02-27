@@ -306,6 +306,24 @@
     .bg-theme-0 { background-color: var(--bg-0); }
     .bg-theme-1 { background-color: var(--bg-1); }
 
+    /* fin-text 文字颜色类 - 适配深浅主题 */
+    .fin-text-primary { color: var(--text-0); }
+    .fin-text-secondary { color: var(--text-1); }
+    .fin-text-tertiary { color: var(--text-2); }
+
+    /* fin-hover 悬停效果 */
+    .fin-hover {
+        transition: background-color 0.15s ease;
+    }
+    .fin-hover:hover {
+        background-color: color-mix(in srgb, var(--text-1) 15%, transparent);
+    }
+
+    /* fin-list-hover 列表项悬停效果 */
+    .fin-list-hover:hover {
+        background-color: color-mix(in srgb, var(--text-1) 10%, transparent);
+    }
+
     /* 浅色主题特殊适配 */
     [data-theme-mode="light"] .fin-panel {
         box-shadow: 0 4px 12px var(--shadow), 0 1px 3px var(--shadow);

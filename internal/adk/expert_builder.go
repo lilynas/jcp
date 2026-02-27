@@ -39,11 +39,6 @@ func NewExpertAgentBuilderFull(llm model.LLM, aiConfig *models.AIConfig, registr
 	return &ExpertAgentBuilder{llm: llm, aiConfig: aiConfig, toolRegistry: registry, mcpManager: mcpMgr}
 }
 
-// BuildAgent 根据配置构建 LLM Agent
-func (b *ExpertAgentBuilder) BuildAgent(config *models.AgentConfig, stock *models.Stock, query string, position *models.StockPosition) (agent.Agent, error) {
-	return b.BuildAgentWithContext(config, stock, query, "", position)
-}
-
 // BuildAgentWithContext 根据配置构建 LLM Agent（支持引用上下文）
 func (b *ExpertAgentBuilder) BuildAgentWithContext(config *models.AgentConfig, stock *models.Stock, query string, replyContent string, position *models.StockPosition) (agent.Agent, error) {
 	instruction := b.buildInstructionWithContext(config, stock, query, replyContent, position)
@@ -71,8 +66,10 @@ func (b *ExpertAgentBuilder) BuildAgentWithContext(config *models.AgentConfig, s
 	if b.aiConfig != nil {
 		temp := float32(b.aiConfig.Temperature)
 		generateConfig = &genai.GenerateContentConfig{
-			Temperature:     &temp,
-			MaxOutputTokens: int32(b.aiConfig.MaxTokens),
+			Temperature: &temp,
+		}
+		if b.aiConfig.MaxTokens > 0 {
+			generateConfig.MaxOutputTokens = int32(b.aiConfig.MaxTokens)
 		}
 	}
 
@@ -85,11 +82,6 @@ func (b *ExpertAgentBuilder) BuildAgentWithContext(config *models.AgentConfig, s
 		Toolsets:              toolsets,
 		GenerateContentConfig: generateConfig,
 	})
-}
-
-// buildInstruction 构建 Agent 指令
-func (b *ExpertAgentBuilder) buildInstruction(config *models.AgentConfig, stock *models.Stock, query string, position *models.StockPosition) string {
-	return b.buildInstructionWithContext(config, stock, query, "", position)
 }
 
 // buildInstructionWithContext 构建 Agent 指令（支持引用上下文）
@@ -130,6 +122,17 @@ func (b *ExpertAgentBuilder) buildInstructionWithContext(config *models.AgentCon
 当前时间: %s
 市场状态: %s
 
+## 工具调用规范
+当你需要调用工具时，必须通过系统提供的标准 function call 机制进行调用。
+**重要：需要调用工具时，不要在工具调用前输出任何思考过程或分析文字，直接发起工具调用。工具返回结果后，再基于结果组织你的回答。**
+禁止在回复文本中输出任何自定义的工具调用标签，包括但不限于：
+- <tool_call>、</tool_call>
+- <tool_call_begin>、</tool_call_end>
+- <invoke>、</invoke>
+- <tool>、</tool>
+- 任何类似 <xxx:tool_call> 格式的标签
+直接使用 API 提供的 tool_calls 功能，不要在文本中模拟工具调用。
+
 股票: %s (%s)
 当前价格: %.2f
 涨跌幅: %.2f%%
@@ -156,11 +159,11 @@ func (b *ExpertAgentBuilder) buildInstructionWithContext(config *models.AgentCon
 %s
 ---
 
-小韭菜问题: %s
+你的分析任务: %s
 
-请结合以上引用的观点，发表你的看法。可以赞同、补充或反驳。回复控制在150字以内。`, replyContent, query)
+请结合以上引用的观点，发表你的专业看法。可以赞同、补充或反驳。回复控制在150字以内。`, replyContent, query)
 	} else {
-		prompt += fmt.Sprintf(`小韭菜问题: %s
+		prompt += fmt.Sprintf(`你的分析任务: %s
 
 请用简洁专业的语言回答，控制在150字以内。`, query)
 	}

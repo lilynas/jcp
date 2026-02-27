@@ -46,7 +46,6 @@ var (
 // Logger 日志记录器
 type Logger struct {
 	module string
-	level  Level
 }
 
 // SetGlobalLevel 设置全局日志级别
@@ -99,22 +98,23 @@ func Close() {
 func New(module string) *Logger {
 	return &Logger{
 		module: module,
-		level:  globalLevel,
 	}
 }
 
 // log 内部日志方法
 func (l *Logger) log(level Level, format string, args ...any) {
-	if level < l.level {
-		return
-	}
-
+	// 先在锁外准备数据，减少锁持有时间
 	timestamp := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
 	levelName := levelNames[level]
 
 	globalMu.Lock()
 	defer globalMu.Unlock()
+
+	// 检查日志级别
+	if level < globalLevel {
+		return
+	}
 
 	// 输出到控制台（带颜色）
 	if enableConsole {
