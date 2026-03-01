@@ -10,7 +10,8 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell
+  Cell,
+  type TooltipProps
 } from 'recharts';
 import { KLineData, TimePeriod, Stock } from '../types';
 
@@ -354,9 +355,10 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
                   contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', color: '#e2e8f0' }}
                   itemStyle={{ color: '#38bdf8' }}
                   labelStyle={{ color: '#94a3b8' }}
-                  content={({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: Record<string, number> }>; label?: string }) => {
+                  content={(props: TooltipProps<number, string>) => {
+                    const { active, payload, label } = props;
                     if (!active || !payload || payload.length === 0) return null;
-                    const d = payload[0]?.payload;
+                    const d = payload[0]?.payload as Record<string, number> | undefined;
                     if (!d) return null;
                     return (
                       <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', padding: '8px 12px', borderRadius: '4px' }}>
@@ -410,9 +412,10 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
                 contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', color: '#e2e8f0' }}
                 itemStyle={{ color: '#cbd5f5' }}
                 labelStyle={{ color: '#94a3b8' }}
-                content={({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: Record<string, number> }>; label?: string }) => {
+                content={(props: TooltipProps<number, string>) => {
+                  const { active, payload, label } = props;
                   if (!active || !payload || payload.length === 0) return null;
-                  const d = payload[0]?.payload;
+                  const d = payload[0]?.payload as Record<string, number> | undefined;
                   if (!d) return null;
                   return (
                     <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', padding: '8px 12px', borderRadius: '4px' }}>
