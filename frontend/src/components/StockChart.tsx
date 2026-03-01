@@ -347,14 +347,14 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
                   tick={{ fill: '#94a3b8', fontSize: 10 }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(val) => val.toFixed(2)}
+                  tickFormatter={(val: number) => val.toFixed(2)}
                 />
                 <Tooltip
                   active={!isDragging}
                   contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', color: '#e2e8f0' }}
                   itemStyle={{ color: '#38bdf8' }}
                   labelStyle={{ color: '#94a3b8' }}
-                  content={({ active, payload, label }) => {
+                  content={({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: Record<string, number> }>; label?: string }) => {
                     if (!active || !payload || payload.length === 0) return null;
                     const d = payload[0]?.payload;
                     if (!d) return null;
@@ -403,14 +403,14 @@ export const StockChart: React.FC<StockChartProps> = ({ data, period, onPeriodCh
                 tick={{ fill: '#94a3b8', fontSize: 10 }} 
                 axisLine={false}
                 tickLine={false}
-                tickFormatter={(val) => val.toFixed(1)}
+                tickFormatter={(val: number) => val.toFixed(1)}
               />
               <Tooltip
                 active={!isDragging}
                 contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', color: '#e2e8f0' }}
                 itemStyle={{ color: '#cbd5f5' }}
                 labelStyle={{ color: '#94a3b8' }}
-                content={({ active, payload, label }) => {
+                content={({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: Record<string, number> }>; label?: string }) => {
                   if (!active || !payload || payload.length === 0) return null;
                   const d = payload[0]?.payload;
                   if (!d) return null;
