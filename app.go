@@ -56,7 +56,7 @@ func NewApp() *App {
 	if err := logger.InitFileLogger(filepath.Join(dataDir, "logs")); err != nil {
 		log.Error("初始化文件日志失败: %v", err)
 	}
-	logger.SetGlobalLevel(logger.INFO)
+	logger.SetGlobalLevel(logger.DEBUG)
 
 	// 初始化配置服务
 	configService, err := services.NewConfigService(dataDir)

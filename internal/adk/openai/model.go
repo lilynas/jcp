@@ -111,7 +111,27 @@ func (o *OpenAIModel) processStream(stream *openai.ChatCompletionStream, yield f
 	var usageMetadata *genai.GenerateContentResponseUsageMetadata
 	toolCallsMap := make(map[int]*toolCallBuilder)
 	var textContent string
-	var reasoningContent string
+	var thoughtContent string
+	thinkParser := newThinkTagStreamParser()
+
+	emitPartial := func(seg thinkSegment) bool {
+		if seg.Text == "" {
+			return true
+		}
+		if seg.Thought {
+			thoughtContent += seg.Text
+		} else {
+			textContent += seg.Text
+		}
+
+		part := &genai.Part{Text: seg.Text, Thought: seg.Thought}
+		llmResp := &model.LLMResponse{
+			Content:      &genai.Content{Role: "model", Parts: []*genai.Part{part}},
+			Partial:      true,
+			TurnComplete: false,
+		}
+		return yield(llmResp, nil)
+	}
 
 	var streamErr error
 	for {
@@ -133,36 +153,24 @@ func (o *OpenAIModel) processStream(stream *openai.ChatCompletionStream, yield f
 
 		choice := chunk.Choices[0]
 
-		// 处理 reasoning_content (thinking 模型)
+		// 官方 reasoning_content -> Thought
 		if choice.Delta.ReasoningContent != "" {
-			reasoningContent += choice.Delta.ReasoningContent
-			// 发送 thinking 部分
-			part := &genai.Part{Text: choice.Delta.ReasoningContent, Thought: true}
-			llmResp := &model.LLMResponse{
-				Content:      &genai.Content{Role: "model", Parts: []*genai.Part{part}},
-				Partial:      true,
-				TurnComplete: false,
-			}
-			if !yield(llmResp, nil) {
+			if !emitPartial(thinkSegment{
+				Text:    choice.Delta.ReasoningContent,
+				Thought: true,
+			}) {
 				return
 			}
 		}
 
-		// 处理普通文本内容
-		if choice.Delta.Content != "" {
-			textContent += choice.Delta.Content
-			part := &genai.Part{Text: choice.Delta.Content}
-			llmResp := &model.LLMResponse{
-				Content:      &genai.Content{Role: "model", Parts: []*genai.Part{part}},
-				Partial:      true,
-				TurnComplete: false,
-			}
-			if !yield(llmResp, nil) {
+		// content 中的 <think>...</think> -> Thought
+		for _, seg := range thinkParser.Feed(choice.Delta.Content) {
+			if !emitPartial(seg) {
 				return
 			}
 		}
 
-		// 处理工具调用
+		// 处理标准工具调用
 		for _, toolCall := range choice.Delta.ToolCalls {
 			idx := 0
 			if toolCall.Index != nil {
@@ -183,12 +191,10 @@ func (o *OpenAIModel) processStream(stream *openai.ChatCompletionStream, yield f
 			builder.args += toolCall.Function.Arguments
 		}
 
-		// 处理结束原因
 		if choice.FinishReason != "" {
 			finishReason = convertFinishReason(string(choice.FinishReason))
 		}
 
-		// 处理 usage
 		if chunk.Usage != nil {
 			usageMetadata = &genai.GenerateContentResponseUsageMetadata{
 				PromptTokenCount:     int32(chunk.Usage.PromptTokens),
@@ -198,13 +204,19 @@ func (o *OpenAIModel) processStream(stream *openai.ChatCompletionStream, yield f
 		}
 	}
 
-	// 添加聚合的文本内容，解析第三方特殊工具调用标记
+	// 刷新流式标签解析器（处理标签跨 chunk 场景）
+	for _, seg := range thinkParser.Flush() {
+		if !emitPartial(seg) {
+			return
+		}
+	}
+
+	// 聚合文本并解析第三方工具调用标记
 	if textContent != "" {
 		vendorCalls, cleanedText := parseVendorToolCalls(textContent)
 		if cleanedText != "" {
 			aggregatedContent.Parts = append(aggregatedContent.Parts, &genai.Part{Text: cleanedText})
 		}
-		// 将第三方工具调用转换为 FunctionCall
 		for i, vc := range vendorCalls {
 			aggregatedContent.Parts = append(aggregatedContent.Parts, &genai.Part{
 				FunctionCall: &genai.FunctionCall{
@@ -216,12 +228,11 @@ func (o *OpenAIModel) processStream(stream *openai.ChatCompletionStream, yield f
 		}
 	}
 
-	// 添加 reasoning content 作为 thought part
-	if reasoningContent != "" {
-		aggregatedContent.Parts = append([]*genai.Part{{Text: reasoningContent, Thought: true}}, aggregatedContent.Parts...)
+	if thoughtContent != "" {
+		aggregatedContent.Parts = append([]*genai.Part{{Text: thoughtContent, Thought: true}}, aggregatedContent.Parts...)
 	}
 
-	// 添加工具调用
+	// 聚合标准工具调用
 	if len(toolCallsMap) > 0 {
 		indices := sortedKeys(toolCallsMap)
 		for _, idx := range indices {
@@ -237,13 +248,11 @@ func (o *OpenAIModel) processStream(stream *openai.ChatCompletionStream, yield f
 		}
 	}
 
-	// 流式错误时，yield 错误让上层感知
 	if streamErr != nil {
 		yield(nil, streamErr)
 		return
 	}
 
-	// 发送最终聚合响应
 	finalResp := &model.LLMResponse{
 		Content:       aggregatedContent,
 		UsageMetadata: usageMetadata,

@@ -598,17 +598,12 @@ func (ms *MarketService) GenerateOrderBook(price float64) models.OrderBook {
 
 // GetMarketStatus 获取当前市场交易状态
 func (ms *MarketService) GetMarketStatus() MarketStatus {
-	log.Debug("开始获取市场状态")
 	now := time.Now()
 	// 使用固定时区 UTC+8，避免 Windows 缺少时区数据库的问题
 	loc := time.FixedZone("CST", 8*60*60)
 	now = now.In(loc)
-	log.Debug("当前时间: %s, 星期: %s", now.Format("2006-01-02 15:04:05"), now.Weekday())
-
 	// 检查是否为交易日
 	isTradeDay, holidayName := ms.isTradeDay(now)
-	log.Debug("isTradeDay=%v, holidayName=%s", isTradeDay, holidayName)
-
 	if !isTradeDay {
 		statusText := "休市"
 		if holidayName != "" {
@@ -622,14 +617,12 @@ func (ms *MarketService) GetMarketStatus() MarketStatus {
 			IsTradeDay:  false,
 			HolidayName: holidayName,
 		}
-		log.Debug("返回结果: %+v", result)
 		return result
 	}
 
 	// 交易日，判断当前时间段
 	hour, minute := now.Hour(), now.Minute()
 	currentMinutes := hour*60 + minute
-	log.Debug("交易日时间判断: %02d:%02d, currentMinutes=%d", hour, minute, currentMinutes)
 
 	// A股交易时间: 9:30-11:30, 13:00-15:00
 	var result MarketStatus
@@ -647,7 +640,6 @@ func (ms *MarketService) GetMarketStatus() MarketStatus {
 	default:
 		result = MarketStatus{Status: "closed", StatusText: "已收盘", IsTradeDay: true}
 	}
-	log.Debug("返回结果: %+v", result)
 	return result
 }
 
@@ -679,19 +671,16 @@ func (ms *MarketService) GetTradingSchedule() TradingSchedule {
 // isTradeDay 判断指定日期是否为交易日
 // A股交易日判定：非周末 且 非节假日（调休上班也不算交易日）
 func (ms *MarketService) isTradeDay(date time.Time) (bool, string) {
-	log.Debug("判断是否为交易日: %s", date.Format("2006-01-02"))
 
 	// 周末一律不是交易日
 	weekday := date.Weekday()
 	if weekday == time.Saturday || weekday == time.Sunday {
-		log.Debug("周末休息")
 		return false, "周末"
 	}
 
 	// 工作日：检查是否为节假日
 	isOffDay, inList, note := ms.getHolidayStatus(date)
 	if inList && isOffDay {
-		log.Debug("节假日休息: %s", note)
 		return false, note
 	}
 

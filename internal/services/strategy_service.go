@@ -506,6 +506,9 @@ func (s *StrategyService) callLLM(ctx context.Context, prompt string) (string, e
 		}
 		if resp != nil && resp.Content != nil {
 			for _, part := range resp.Content.Parts {
+				if part.Thought {
+					continue
+				}
 				if part.Text != "" {
 					result += part.Text
 				}

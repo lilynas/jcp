@@ -384,6 +384,7 @@ export namespace models {
 	}
 	export class AppConfig {
 	    theme: string;
+	    candleColorMode: string;
 	    aiConfigs: AIConfig[];
 	    defaultAiId: string;
 	    strategyAiId: string;
@@ -400,6 +401,7 @@ export namespace models {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.theme = source["theme"];
+	        this.candleColorMode = source["candleColorMode"];
 	        this.aiConfigs = this.convertValues(source["aiConfigs"], AIConfig);
 	        this.defaultAiId = source["defaultAiId"];
 	        this.strategyAiId = source["strategyAiId"];

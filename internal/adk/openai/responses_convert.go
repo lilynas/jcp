@@ -223,8 +223,11 @@ func convertResponsesResponse(resp *CreateResponseResponse) (*model.LLMResponse,
 				case "output_text":
 					// 解析第三方特殊工具调用标记
 					vendorCalls, cleanedText := parseVendorToolCalls(part.Text)
-					if cleanedText != "" {
-						content.Parts = append(content.Parts, &genai.Part{Text: cleanedText})
+					for _, seg := range splitThinkTaggedText(cleanedText) {
+						content.Parts = append(content.Parts, &genai.Part{
+							Text:    seg.Text,
+							Thought: seg.Thought,
+						})
 					}
 					for i, vc := range vendorCalls {
 						content.Parts = append(content.Parts, &genai.Part{

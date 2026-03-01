@@ -302,6 +302,15 @@ Agent 配置通过策略管理系统进行，支持：
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 提交 Pull Request
 
+## 贡献者
+
+感谢以下贡献者对本项目的支持：
+
+<a href="https://github.com/run-bigpig"><img src="https://github.com/run-bigpig.png" width="50" height="50" style="border-radius:50%" alt="run-bigpig" /></a>
+<a href="https://github.com/Twelveeee"><img src="https://github.com/Twelveeee.png" width="50" height="50" style="border-radius:50%" alt="Twelveeee" /></a>
+<a href="https://github.com/taloslhan"><img src="https://github.com/taloslhan.png" width="50" height="50" style="border-radius:50%" alt="taloslhan" /></a>
+<a href="https://github.com/Mustang0394"><img src="https://github.com/Mustang0394.png" width="50" height="50" style="border-radius:50%" alt="Mustang0394" /></a>
+
 ## 许可证
 
 本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。

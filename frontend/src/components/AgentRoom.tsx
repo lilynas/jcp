@@ -611,7 +611,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate, 
                     </span>
                   </div>
                   <div className="relative">
-                    <div className={`text-sm p-3 rounded-2xl rounded-tl-none leading-relaxed shadow-sm ${
+                    <div className={`text-sm p-3 rounded-2xl rounded-tl-none leading-relaxed shadow-sm agent-message-content ${
                       isSummary
                         ? 'bg-gradient-to-br from-amber-900/40 to-orange-900/30 border border-amber-500/30 text-amber-100'
                         : 'bg-slate-800/70 border border-amber-500/20 text-slate-200'

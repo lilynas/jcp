@@ -440,9 +440,12 @@ func convertChatCompletionResponse(resp *openai.ChatCompletionResponse) (*model.
 	// 处理普通内容，解析第三方特殊工具调用标记
 	if choice.Message.Content != "" {
 		vendorCalls, cleanedText := parseVendorToolCalls(choice.Message.Content)
-		// 添加清理后的文本
-		if cleanedText != "" {
-			content.Parts = append(content.Parts, &genai.Part{Text: cleanedText})
+		// 解析 <think> 标签并映射到 Thought
+		for _, seg := range splitThinkTaggedText(cleanedText) {
+			content.Parts = append(content.Parts, &genai.Part{
+				Text:    seg.Text,
+				Thought: seg.Thought,
+			})
 		}
 		// 将第三方工具调用转换为 FunctionCall
 		for i, vc := range vendorCalls {

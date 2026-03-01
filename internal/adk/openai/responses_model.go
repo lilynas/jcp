@@ -19,12 +19,12 @@ import (
 
 var respLog = logger.New("openai:responses")
 
-// sseMaxBufferSize SSE 扫描器最大缓冲区大小（1MB），防止超长工具调用参数被截断
+// sseMaxBufferSize SSE 扫描器最大缓冲区（1MB），防止超长工具参数被截断
 const sseMaxBufferSize = 1024 * 1024
 
 var _ model.LLM = &ResponsesModel{}
 
-// HTTPDoer HTTP 客户端接口（与 go-openai 兼容）
+// HTTPDoer HTTP 客户端接口
 type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -35,11 +35,10 @@ type ResponsesModel struct {
 	baseURL      string
 	apiKey       string
 	modelName    string
-	NoSystemRole bool // 不支持 system role，需降级处理
+	NoSystemRole bool // 不支持 system role 时需要降级处理
 }
 
 // NewResponsesModel 创建 Responses API 模型
-// apiKey 从工厂单独传入，因 go-openai ClientConfig.authToken 不可导出
 func NewResponsesModel(modelName, apiKey, baseURL string, httpClient HTTPDoer, noSystemRole bool) *ResponsesModel {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -67,12 +66,11 @@ func (r *ResponsesModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 }
 
 // responsesEndpoint 返回 Responses API 端点 URL
-// baseURL 已由工厂层 normalizeOpenAIBaseURL 规范化，保证以 /v1 结尾
 func (r *ResponsesModel) responsesEndpoint() string {
 	return r.baseURL + "/responses"
 }
 
-// doRequest 发送 HTTP 请求到 Responses API
+// doRequest 发送 HTTP 请求
 func (r *ResponsesModel) doRequest(ctx context.Context, body []byte, stream bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.responsesEndpoint(), bytes.NewReader(body))
 	if err != nil {
@@ -80,6 +78,7 @@ func (r *ResponsesModel) doRequest(ctx context.Context, body []byte, stream bool
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+r.apiKey)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) CherryStudio/1.2.4 Chrome/126.0.6478.234 Electron/31.7.6 Safari/537.36")
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Cache-Control", "no-cache")
@@ -170,18 +169,18 @@ func (r *ResponsesModel) processResponsesStream(body io.Reader, yield func(*mode
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxBufferSize)
 
-	// 聚合状态
 	aggregatedContent := &genai.Content{Role: "model", Parts: []*genai.Part{}}
 	var textContent string
+	var thoughtContent string
 	toolCallsMap := make(map[string]*responsesToolCallBuilder)
-	var toolCallOrder []string // 记录工具调用插入顺序，保证输出稳定
+	var toolCallOrder []string
 	var usageMetadata *genai.GenerateContentResponseUsageMetadata
 	var currentEventType string
+	thinkParser := newThinkTagStreamParser()
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// SSE 格式解析: "event: <type>" 和 "data: <json>"
 		if eventType, ok := strings.CutPrefix(line, "event: "); ok {
 			currentEventType = eventType
 			continue
@@ -193,17 +192,15 @@ func (r *ResponsesModel) processResponsesStream(body io.Reader, yield func(*mode
 
 		switch currentEventType {
 		case "response.output_text.delta":
-			r.handleTextDelta(data, &textContent, yield)
-
+			if !r.handleTextDelta(data, thinkParser, &textContent, &thoughtContent, yield) {
+				return
+			}
 		case "response.function_call_arguments.delta":
 			r.handleFuncArgsDelta(data, toolCallsMap)
-
 		case "response.output_item.added":
 			r.handleOutputItemAdded(data, toolCallsMap, &toolCallOrder)
-
 		case "response.output_item.done":
 			r.handleOutputItemDone(data, toolCallsMap, &toolCallOrder)
-
 		case "response.completed":
 			r.handleCompleted(data, &usageMetadata)
 		}
@@ -211,14 +208,18 @@ func (r *ResponsesModel) processResponsesStream(body io.Reader, yield func(*mode
 		currentEventType = ""
 	}
 
-	// 检查 scanner 错误（IO 错误、缓冲区溢出等）
 	if err := scanner.Err(); err != nil {
 		respLog.Warn("SSE 流读取错误: %v", err)
 		yield(nil, fmt.Errorf("SSE 流读取错误: %w", err))
 		return
 	}
 
-	// 组装最终聚合响应，解析第三方特殊工具调用标记
+	// 刷新剩余分片（处理标签跨 chunk）
+	if !r.emitTextSegments(thinkParser.Flush(), &textContent, &thoughtContent, yield) {
+		return
+	}
+
+	// 组装最终文本，并解析第三方工具调用标记
 	if textContent != "" {
 		vendorCalls, cleanedText := parseVendorToolCalls(textContent)
 		if cleanedText != "" {
@@ -234,9 +235,13 @@ func (r *ResponsesModel) processResponsesStream(body io.Reader, yield func(*mode
 			})
 		}
 	}
-	// 按插入顺序输出工具调用，保证稳定性
+
+	// 按插入顺序输出标准工具调用
 	for _, id := range toolCallOrder {
 		builder := toolCallsMap[id]
+		if builder == nil {
+			continue
+		}
 		aggregatedContent.Parts = append(aggregatedContent.Parts, &genai.Part{
 			FunctionCall: &genai.FunctionCall{
 				ID:   builder.callID,
@@ -244,6 +249,10 @@ func (r *ResponsesModel) processResponsesStream(body io.Reader, yield func(*mode
 				Args: parseJSONArgs(builder.args),
 			},
 		})
+	}
+
+	if thoughtContent != "" {
+		aggregatedContent.Parts = append([]*genai.Part{{Text: thoughtContent, Thought: true}}, aggregatedContent.Parts...)
 	}
 
 	finalResp := &model.LLMResponse{
@@ -265,20 +274,47 @@ type responsesToolCallBuilder struct {
 }
 
 // handleTextDelta 处理文本增量事件
-func (r *ResponsesModel) handleTextDelta(data string, textContent *string, yield func(*model.LLMResponse, error) bool) {
+func (r *ResponsesModel) handleTextDelta(
+	data string,
+	thinkParser *thinkTagStreamParser,
+	textContent *string,
+	thoughtContent *string,
+	yield func(*model.LLMResponse, error) bool,
+) bool {
 	var delta ResponsesTextDelta
 	if err := json.Unmarshal([]byte(data), &delta); err != nil {
 		respLog.Warn("解析文本增量失败: %v", err)
-		return
+		return true
 	}
-	*textContent += delta.Delta
-	part := &genai.Part{Text: delta.Delta}
-	llmResp := &model.LLMResponse{
-		Content:      &genai.Content{Role: "model", Parts: []*genai.Part{part}},
-		Partial:      true,
-		TurnComplete: false,
+	return r.emitTextSegments(thinkParser.Feed(delta.Delta), textContent, thoughtContent, yield)
+}
+
+func (r *ResponsesModel) emitTextSegments(
+	segments []thinkSegment,
+	textContent *string,
+	thoughtContent *string,
+	yield func(*model.LLMResponse, error) bool,
+) bool {
+	for _, seg := range segments {
+		if seg.Text == "" {
+			continue
+		}
+		if seg.Thought {
+			*thoughtContent += seg.Text
+		} else {
+			*textContent += seg.Text
+		}
+		part := &genai.Part{Text: seg.Text, Thought: seg.Thought}
+		llmResp := &model.LLMResponse{
+			Content:      &genai.Content{Role: "model", Parts: []*genai.Part{part}},
+			Partial:      true,
+			TurnComplete: false,
+		}
+		if !yield(llmResp, nil) {
+			return false
+		}
 	}
-	yield(llmResp, nil)
+	return true
 }
 
 // handleFuncArgsDelta 处理函数调用参数增量事件
@@ -293,7 +329,7 @@ func (r *ResponsesModel) handleFuncArgsDelta(data string, toolCallsMap map[strin
 	}
 }
 
-// handleOutputItemAdded 处理输出项添加事件
+// handleOutputItemAdded 处理 output item added 事件
 func (r *ResponsesModel) handleOutputItemAdded(data string, toolCallsMap map[string]*responsesToolCallBuilder, toolCallOrder *[]string) {
 	var added ResponsesOutputItemAdded
 	if err := json.Unmarshal([]byte(data), &added); err != nil {
@@ -310,7 +346,7 @@ func (r *ResponsesModel) handleOutputItemAdded(data string, toolCallsMap map[str
 	}
 }
 
-// handleOutputItemDone 处理输出项完成事件
+// handleOutputItemDone 处理 output item done 事件
 func (r *ResponsesModel) handleOutputItemDone(data string, toolCallsMap map[string]*responsesToolCallBuilder, toolCallOrder *[]string) {
 	var done ResponsesOutputItemDone
 	if err := json.Unmarshal([]byte(data), &done); err != nil {
@@ -336,7 +372,7 @@ func (r *ResponsesModel) handleOutputItemDone(data string, toolCallsMap map[stri
 	}
 }
 
-// handleCompleted 处理响应完成事件
+// handleCompleted 处理 response.completed 事件
 func (r *ResponsesModel) handleCompleted(data string, usageMetadata **genai.GenerateContentResponseUsageMetadata) {
 	var completed ResponsesCompleted
 	if err := json.Unmarshal([]byte(data), &completed); err != nil {
